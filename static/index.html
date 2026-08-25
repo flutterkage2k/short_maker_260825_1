@@ -108,9 +108,16 @@
   #segList { display: flex; flex-direction: column; gap: 6px; max-height: 200px;
              overflow-y: auto; }
   .segrow { display: flex; gap: 6px; align-items: center; }
-  .segrow .t { font-size: 11px; color: #7aa2ff; white-space: nowrap; width: 40px; }
+  .segrow .t { font-size: 11px; color: #7aa2ff; white-space: nowrap; width: 40px;
+               cursor: pointer; }
+  .segrow .t:hover { text-decoration: underline; }
   .segrow input { flex: 1; min-width: 0; padding: 6px 8px; font-size: 13px; }
   .ed-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .vlabel { font-size: 12px; color: #8a919e; margin-top: 10px; }
+  @media (max-width: 720px) { /* 앱 내장 브라우저 좁은 패널 대응 */
+    .ed-box { flex-direction: column; overflow-y: auto; }
+    .ed-right { width: auto; max-width: none; }
+  }
 </style>
 </head>
 <body>
@@ -148,6 +155,7 @@
       </div>
       <div class="ed-playrow">
         <button class="ghost" id="edPlay">재생</button>
+        <input type="range" id="edSeek" step="0.1" style="flex:1">
         <span class="muted" id="edTime"></span>
       </div>
     </div>
@@ -208,33 +216,52 @@
 <script>
 const $ = (s) => document.querySelector(s);
 const opened = new Set();
-let cutting = false;
+const pending = new Set(); // "cut:이름:번호" / "meta:이름:번호" — 생성 중 표시가 재렌더에도 유지
+const jsName = (n) => encodeURIComponent(n).replace(/'/g, "%27"); // '가 인라인 핸들러 안 깨게
+async function errText(res) {
+  try { return (await res.json()).detail || res.statusText; }
+  catch { return res.statusText || `HTTP ${res.status}`; }
+}
 
 $("#file").addEventListener("change", () => {
   $("#fileName").textContent = $("#file").files[0]?.name || "선택 안 함";
 });
 
-$("#go").addEventListener("click", async () => {
-  const fd = new FormData();
+function submitJob() {
   const f = $("#file").files[0];
+  const url = $("#url").value.trim();
+  $("#formErr").textContent = "";
+  if (f && url) { $("#formErr").textContent = "파일과 URL 중 하나만 입력하세요"; return; }
+  if (!f && !url) { $("#formErr").textContent = "파일 또는 유튜브 URL을 입력하세요"; return; }
+  const fd = new FormData();
   if (f) fd.append("file", f);
-  fd.append("url", $("#url").value);
+  fd.append("url", url);
   $("#go").disabled = true;
   $("#go").textContent = f ? "업로드 중..." : "등록 중...";
-  $("#formErr").textContent = "";
-  try {
-    const res = await fetch("/api/jobs", { method: "POST", body: fd });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-    $("#file").value = ""; $("#url").value = "";
-    $("#fileName").textContent = "선택 안 함";
-    lastData = ""; refresh();
-  } catch (e) {
-    $("#formErr").textContent = e.message;
-  } finally {
-    $("#go").disabled = false;
-    $("#go").textContent = "분석 시작";
-  }
-});
+  const xhr = new XMLHttpRequest(); // fetch는 업로드 진행률 이벤트가 없음
+  xhr.open("POST", "/api/jobs");
+  xhr.upload.onprogress = (e) => {
+    if (f && e.lengthComputable)
+      $("#go").textContent = `업로드 중 ${Math.round((e.loaded / e.total) * 100)}%`;
+  };
+  const done = () => { $("#go").disabled = false; $("#go").textContent = "분석 시작"; };
+  xhr.onload = () => {
+    done();
+    if (xhr.status >= 200 && xhr.status < 300) {
+      $("#file").value = ""; $("#url").value = "";
+      $("#fileName").textContent = "선택 안 함";
+      lastData = ""; refresh();
+    } else {
+      let msg = xhr.statusText;
+      try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+      $("#formErr").textContent = msg;
+    }
+  };
+  xhr.onerror = () => { done(); $("#formErr").textContent = "요청 실패 — 서버 상태를 확인하세요"; };
+  xhr.send(fd);
+}
+$("#go").addEventListener("click", submitJob);
+$("#url").addEventListener("keydown", (e) => { if (e.key === "Enter") submitJob(); });
 
 function fmt(sec) {
   const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
@@ -245,7 +272,7 @@ function esc(s) {
 }
 
 function metaHtml(m) {
-  if (!m) return "";
+  if (!m || !Array.isArray(m.titles) || !Array.isArray(m.tags)) return "";
   const titles = m.titles.map((t) =>
     `<div class="mrow"><span>${esc(t)}</span>
      <button class="ghost mcopy" onclick="copyText(this, ${JSON.stringify(t).replaceAll('"', "&quot;")})">복사</button></div>`).join("");
@@ -261,42 +288,57 @@ function metaHtml(m) {
   </div>`;
 }
 
+function cutLabel(u) {
+  const f = u.split("/").pop();
+  if (f.includes("_edit")) return "편집 스타일";
+  if (f.includes("_sub")) return "기본 스타일 (자막)";
+  return "자막 없음";
+}
+
 function clipHtml(job, c, i) {
   const cuts = (job.cuts && job.cuts[String(i + 1)]) || [];
   const meta = job.metas && job.metas[String(i + 1)];
   const dur = Math.round(c.end_sec - c.start_sec);
-  const jn = encodeURIComponent(job.name);
+  const jn = jsName(job.name);
+  const cutting2 = pending.has(`cut:${jn}:${i}`);
+  const metaing = pending.has(`meta:${jn}:${i}`);
   return `<div class="clip">
     <div class="clip-top">
       <h3>${i + 1}. ${esc(c.title)}</h3>
-      <span class="time">${fmt(c.start_sec)} ~ ${fmt(c.end_sec)} · ${dur}초 · 훅 ${c.hook ?? "?"}/10</span>
+      <span class="time">${fmt(c.start_sec)} ~ ${fmt(c.end_sec)} · ${dur}초 · 훅 ${esc(String(c.hook ?? "?"))}/10</span>
     </div>
     <p>${esc(c.reason)}</p>
     <div class="actions">
       <label class="chk"><input type="checkbox" checked data-subs> 자막 넣기</label>
-      <button class="ghost" onclick="cut('${jn}', ${i}, this)">숏츠 생성</button>
+      <button class="ghost" onclick="cut('${jn}', ${i}, this)" ${cutting2 ? "disabled" : ""}>${cutting2 ? "생성 중..." : "숏츠 생성"}</button>
       <button onclick="openEditor('${jn}', ${i})">자막 편집</button>
-      <button class="ghost" onclick="makeMeta('${jn}', ${i}, this)">${meta ? "업로드 정보 다시 생성" : "업로드 정보 생성"}</button>
+      <button class="ghost" onclick="makeMeta('${jn}', ${i}, this)" ${metaing ? "disabled" : ""}>${metaing ? "생성 중... (수십 초)" : meta ? "업로드 정보 다시 생성" : "업로드 정보 생성"}</button>
     </div>
     ${metaHtml(meta)}
-    ${cuts.map((u) => `<video class="result" src="${u}" controls preload="metadata"></video>
+    ${cuts.map((u) => `<div class="vlabel">${cutLabel(u)}</div>
+      <video class="result" src="${u}" controls preload="metadata"></video>
       <a class="dl" href="${u}" download>다운로드: ${u.split("/").pop()}</a>`).join("")}
   </div>`;
 }
 
 async function makeMeta(name, index, btn) {
+  const key = `meta:${name}:${index}`;
+  if (pending.has(key)) return;
+  pending.add(key);
   btn.disabled = true; btn.textContent = "생성 중... (수십 초)";
   try {
     const res = await fetch(`/api/jobs/${name}/meta`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index }),
     });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-    lastData = "";
-    await refresh();
+    if (!res.ok) throw new Error(await errText(res));
+    toast("업로드 정보 생성 완료");
   } catch (e) {
     toast("생성 실패: " + e.message);
-    btn.disabled = false; btn.textContent = "업로드 정보 생성";
+  } finally {
+    pending.delete(key);
+    lastData = "";
+    refresh();
   }
 }
 
@@ -310,8 +352,9 @@ async function copyText(btn, text) {
 }
 
 async function cut(name, index, btn) {
-  if (cutting) return;
-  cutting = true;
+  const key = `cut:${name}:${index}`;
+  if (pending.has(key)) return;
+  pending.add(key);
   const subs = btn.parentElement.querySelector("[data-subs]").checked;
   btn.disabled = true; btn.textContent = "생성 중...";
   try {
@@ -319,15 +362,14 @@ async function cut(name, index, btn) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index, subtitles: subs }),
     });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-    lastData = "";
-    cutting = false;
-    await refresh();
+    if (!res.ok) throw new Error(await errText(res));
+    toast("숏츠 생성 완료");
   } catch (e) {
     toast("생성 실패: " + e.message);
   } finally {
-    cutting = false;
-    btn.disabled = false; btn.textContent = "숏츠 생성";
+    pending.delete(key);
+    lastData = "";
+    refresh();
   }
 }
 
@@ -335,11 +377,13 @@ function render(data) {
   const box = $("#jobs");
   let html = "";
   for (const a of data.active) {
+    const badge = a.state === "error"
+      ? `<span class="badge error">오류</span>`
+      : `<span class="badge run"><span class="spin"></span>${a.state_label} ·
+         <span class="tick" data-t0="${Date.now() - (a.elapsed || 0) * 1000}">${fmt(a.elapsed || 0)}</span></span>`;
     html += `<div class="job"><div class="job-head">
-      <span class="job-title">${esc(a.label)}</span>
-      <span class="badge run"><span class="spin"></span>${a.state_label} ·
-        <span class="tick" data-t0="${Date.now() - (a.elapsed || 0) * 1000}">${fmt(a.elapsed || 0)}</span></span>
-    </div></div>`;
+      <span class="job-title">${esc(a.label)}</span>${badge}
+    </div>${a.error ? `<div class="err">${esc(a.error)}</div>` : ""}</div>`;
   }
   for (const j of data.jobs) {
     const open = opened.has(j.name) ? "open" : "";
@@ -348,10 +392,10 @@ function render(data) {
       ? `<span class="badge error">오류${took}</span>`
       : `<span class="badge done">완료 · 구간 ${j.clips.length}개${took}</span>`;
     html += `<div class="job ${open}" data-name="${esc(j.name)}">
-      <div class="job-head" onclick="toggle('${encodeURIComponent(j.name)}')">
+      <div class="job-head" onclick="toggle('${jsName(j.name)}')">
         <span class="job-title">${esc(j.name)}</span>
         <span class="head-right">${badge}
-          <button class="del" onclick="deleteJob(event, '${encodeURIComponent(j.name)}')">삭제</button>
+          <button class="del" onclick="deleteJob(event, '${jsName(j.name)}')">삭제</button>
         </span>
       </div>
       ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
@@ -391,7 +435,7 @@ function deleteJob(event, encName) {
     yes.disabled = true; yes.textContent = "삭제 중...";
     try {
       const res = await fetch(`/api/jobs/${encName}`, { method: "DELETE" });
-      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      if (!res.ok) throw new Error(await errText(res));
       opened.delete(decodeURIComponent(encName));
       lastData = "";
       toast("삭제 완료");
@@ -412,15 +456,36 @@ function toggle(encName) {
 }
 
 let lastData = "";
+let prevActive = null; // 직전 폴링의 진행 중 작업 id -> 이름
+function notifyCompleted(data) {
+  const cur = new Map(data.active.map((a) => [a.id, a.label]));
+  if (prevActive) {
+    for (const [id, label] of prevActive) {
+      if (cur.has(id)) continue;
+      const j = data.jobs.find((x) => x.name === label);
+      if (!j) continue;
+      if (j.state === "error") {
+        toast(`분석 오류: ${label}`);
+      } else {
+        opened.add(label); // 완료된 작업은 자동으로 펼쳐서 바로 보이게
+        toast(`분석 완료: ${label}`);
+      }
+      if (document.hidden) document.title = "✅ 완료 — 숏츠 마커";
+    }
+  }
+  prevActive = cur;
+}
+window.addEventListener("focus", () => { document.title = "숏츠 마커"; });
+
 async function refresh() {
-  if (cutting) return; // 생성 중 목록 갈아엎으면 버튼 상태 날아감
   try {
     const data = await (await fetch("/api/jobs")).json();
     // elapsed는 매번 변해서 비교에서 제외 — 경과시간만 바뀔 땐 재렌더 안 함(영상 재생 안 끊기게)
     const s = JSON.stringify(data, (k, v) => (k === "elapsed" ? undefined : v));
     if (s === lastData) return;
-    lastData = s;
+    notifyCompleted(data);
     render(data);
+    lastData = s; // render 성공 후에만 — 렌더 예외로 화면이 굳지 않게
   } catch {}
 }
 
@@ -456,7 +521,7 @@ async function openEditor(encName, index) {
   let data;
   try {
     const res = await fetch(`/api/jobs/${encName}/editor/${index}`);
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    if (!res.ok) throw new Error(await errText(res));
     data = await res.json();
   } catch (e) { toast("편집기 열기 실패: " + e.message); return; }
   ed = { name, index, clip: data.clip, segments: data.segments,
@@ -482,9 +547,19 @@ async function openEditor(encName, index) {
   $("#cOutline").value = ed.style.cta.outline;
   $("#cLast").value = ed.style.cta.last_sec;
 
+  $("#edSeek").min = ed.clip.start_sec;
+  $("#edSeek").max = ed.clip.end_sec;
+  $("#edSeek").value = ed.clip.start_sec;
+
   $("#segList").innerHTML = ed.segments.map((s) =>
-    `<div class="segrow"><span class="t">${fmt(s.start)}</span>
+    `<div class="segrow"><span class="t" data-jump="${s.start}" title="이 시점으로 이동">${fmt(s.start)}</span>
      <input type="text" data-seg="${s.i}" value="${esc(s.text)}"></div>`).join("");
+  $("#segList").querySelectorAll(".t").forEach((el) => {
+    el.addEventListener("click", () => {
+      edv.currentTime = Number(el.dataset.jump);
+      updateOverlays();
+    });
+  });
   $("#segList").querySelectorAll("input").forEach((inp) => {
     inp.addEventListener("input", () => {
       const i = Number(inp.dataset.seg);
@@ -564,6 +639,13 @@ edv.addEventListener("timeupdate", () => {
   if (edv.currentTime >= ed.clip.end_sec) {
     edv.currentTime = ed.clip.start_sec; // 구간 반복
   }
+  $("#edSeek").value = edv.currentTime;
+  updateOverlays();
+});
+
+$("#edSeek").addEventListener("input", () => {
+  if (!ed) return;
+  edv.currentTime = Number($("#edSeek").value);
   updateOverlays();
 });
 
@@ -621,27 +703,27 @@ $("#edClose").addEventListener("click", () => {
 });
 
 $("#edMake").addEventListener("click", async () => {
-  if (!ed || cutting) return;
-  cutting = true;
+  if (!ed) return;
   const btn = $("#edMake");
+  if (btn.disabled) return;
   btn.disabled = true; btn.textContent = "생성 중...";
   $("#edErr").textContent = "";
   try {
     const edits = [...ed.edits].map(([i, text]) => ({ i, text }));
-    const res = await fetch(`/api/jobs/${encodeURIComponent(ed.name)}/cut`, {
+    const res = await fetch(`/api/jobs/${jsName(ed.name)}/cut`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index: ed.index, style: ed.style, edits }),
     });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    if (!res.ok) throw new Error(await errText(res));
     edv.pause(); $("#edPlay").textContent = "재생";
     $("#modal").classList.remove("show");
     ed = null;
-    lastData = ""; cutting = false;
+    toast("숏츠 생성 완료");
+    lastData = "";
     await refresh();
   } catch (e) {
     $("#edErr").textContent = "생성 실패: " + e.message;
   } finally {
-    cutting = false;
     btn.disabled = false; btn.textContent = "숏츠 생성";
   }
 });

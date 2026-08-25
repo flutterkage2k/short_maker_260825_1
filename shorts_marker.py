@@ -21,12 +21,19 @@ CLAUDE_TIMEOUT_SEC = 600
 
 
 def is_url(source: str) -> bool:
-    return source.startswith(("http://", "https://"))
+    """유튜브 URL만 허용 (내부망 주소 등으로 요청 유도되는 것 방지)."""
+    if not source.startswith(("http://", "https://")):
+        return False
+    from urllib.parse import urlparse
+    host = urlparse(source).hostname or ""
+    return host == "youtu.be" or host.endswith("youtube.com")
 
 
 def safe_name(name: str) -> str:
     """폴더 이름으로 쓸 수 있게 특수문자 제거."""
     name = re.sub(r'[\\/:*?"<>|]', "_", name).strip()
+    if not name.strip("."):  # "." ".." 같은 이름 반려
+        return "video"
     return name[:80] or "video"
 
 
@@ -47,7 +54,8 @@ def download_media(url: str, workdir: Path) -> Path:
             sys.executable, "-m", "yt_dlp",
             "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
             "--merge-output-format", "mp4",
-            "-o", str(workdir / "%(title)s.%(ext)s"),
+            # 영상 id 포함 — 같은 제목의 다른 영상이 기존 파일로 오인되는 것 방지
+            "-o", str(workdir / "%(title)s [%(id)s].%(ext)s"),
             "--print", "after_move:filepath",
             "--no-simulate",
             "--no-playlist",
@@ -113,18 +121,32 @@ def ask_claude_json(prompt: str, pattern: str, retries: int = 1) -> object:
         if not match:
             last_err = RuntimeError(f"claude 응답에서 JSON을 찾지 못함:\n{raw[:500]}")
             continue
-        text = re.sub(r",\s*([}\]])", r"\1", match.group(0))  # 흔한 형식 오류(끝 쉼표) 정리
+        text = match.group(0)
         try:
             return json.loads(text)
-        except json.JSONDecodeError as e:
-            last_err = RuntimeError(f"claude 응답 JSON 형식 오류: {e}\n{text[:500]}")
+        except json.JSONDecodeError:
+            # 흔한 형식 오류(끝 쉼표)만 정리 후 재시도 — 정상 JSON은 위에서 이미 통과
+            text = re.sub(r",\s*([}\]])", r"\1", text)
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as e:
+                last_err = RuntimeError(f"claude 응답 JSON 형식 오류: {e}\n{text[:500]}")
     raise last_err
 
 
 # ponytail: 전사본 전체를 한 번에 전달. 2~3시간급 초장편에서 잘리면 청크 분할 추가.
 def select_segments(transcript_text: str) -> list[dict]:
-    """전사본에서 숏츠 후보 구간 선정."""
-    clips = ask_claude_json(SELECT_PROMPT + transcript_text, r"\[.*\]")
+    """전사본에서 숏츠 후보 구간 선정. 시각값 검증까지."""
+    raw = ask_claude_json(SELECT_PROMPT + transcript_text, r"\[.*\]")
+    clips = []
+    for c in raw:
+        try:
+            c["start_sec"] = float(c["start_sec"])
+            c["end_sec"] = float(c["end_sec"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if c["end_sec"] > c["start_sec"]:
+            clips.append(c)
     clips.sort(key=lambda c: c["start_sec"])
     return clips
 

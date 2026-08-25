@@ -80,6 +80,9 @@ def run_job(job: dict):
             media_path = Path(source)
 
         outdir = OUTPUT_DIR / safe_name(media_path.stem)
+        if outdir.exists():
+            # 재분석: 새 구간 목록과 어긋나는 옛 클립·스타일·메타 제거
+            shutil.rmtree(outdir / "clips", ignore_errors=True)
         outdir.mkdir(parents=True, exist_ok=True)
         with jobs_lock:
             active_jobs[jid]["label"] = media_path.stem
@@ -105,7 +108,13 @@ def run_job(job: dict):
         with jobs_lock:
             del active_jobs[jid]  # 완료되면 디스크 목록으로 넘어감
     except Exception as e:  # noqa: BLE001 — 워커는 죽으면 안 됨, 오류는 상태로 보고
-        set_state("error", outdir, error=str(e))
+        try:
+            set_state("error", outdir, error=str(e))
+            if outdir:  # 디스크 status가 이어받으므로 목록 이중 표시 방지
+                with jobs_lock:
+                    active_jobs.pop(jid, None)
+        except Exception:  # noqa: BLE001 — 오류 처리 중 IO 실패로 워커가 죽지 않게
+            pass
 
 
 def worker():
@@ -135,8 +144,8 @@ threading.Thread(target=worker, daemon=True).start()
 
 def job_dir(name: str) -> Path:
     d = (OUTPUT_DIR / name).resolve()
-    if not d.is_dir() or d.parent != OUTPUT_DIR.resolve():
-        raise HTTPException(404, "작업 없음")
+    if name.startswith("_") or not d.is_dir() or d.parent != OUTPUT_DIR.resolve():
+        raise HTTPException(404, "작업 없음")  # _downloads/_uploads 내부 폴더 접근 차단
     return d
 
 
@@ -183,13 +192,21 @@ async def create_job(file: UploadFile | None = None, url: str = Form("")):
     url = url.strip()
     if file and file.filename:
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        jid = uuid.uuid4().hex[:8]
         orig = Path(file.filename)
-        dest = UPLOAD_DIR / (safe_name(orig.stem) + orig.suffix)
+        # id 접미사 — 같은 이름 파일을 연달아 올려도 진행 중인 원본을 덮어쓰지 않게
+        dest = UPLOAD_DIR / (safe_name(orig.stem) + "_" + jid + orig.suffix)
+        total = 0
         with dest.open("wb") as f:
             while chunk := await file.read(1 << 20):
+                total += len(chunk)
+                if total > 5 * 1024 ** 3:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(413, "파일이 너무 큽니다 (5GB 제한)")
                 f.write(chunk)
-        job = {"id": uuid.uuid4().hex[:8], "kind": "file", "source": str(dest),
-               "label": dest.stem, "state": "queued"}
+        job = {"id": jid, "kind": "file", "source": str(dest),
+               "label": orig.stem, "state": "queued"}
     elif is_url(url):
         job = {"id": uuid.uuid4().hex[:8], "kind": "url", "source": url,
                "label": url, "state": "queued"}
@@ -232,6 +249,8 @@ class CutRequest(BaseModel):
 def cut_clip(name: str, req: CutRequest):
     d = job_dir(name)
     clip = load_clip(d, req.index)
+    if not float(clip["end_sec"]) > float(clip["start_sec"]):
+        raise HTTPException(400, "구간 시각이 잘못됨 (끝이 시작보다 앞)")
     media = get_source_media(d)
 
     transcript = json.loads((d / "transcript.json").read_text(encoding="utf-8"))

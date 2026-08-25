@@ -5,6 +5,7 @@ ffmpeg overlay 필터로 시간 맞춰 얹는 방식을 쓴다.
 웹 편집기(WYSIWYG)가 좌표·크기·색을 style로 넘기면 그대로 렌더링한다.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -104,6 +105,15 @@ def make_short(
 
     workdir = out_path.parent / f".{out_path.stem}_work"
     workdir.mkdir(exist_ok=True)
+    try:
+        return _make_short_inner(source, start, duration, out_path, segments, st, workdir)
+    finally:
+        # 중간에 어떤 예외로 죽어도 PNG 잔재가 남아 다음 시도를 막지 않게
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _make_short_inner(source, start, duration, out_path, segments, st, workdir) -> Path:
+    end = start + duration
     overlays = []  # (png_path, y좌표, 표시 시작, 표시 끝) — 클립 기준 시각
 
     if st["title"]["enabled"] and st["title"]["text"].strip():
@@ -149,9 +159,6 @@ def make_short(
         str(out_path.resolve()),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
-    for png, _, _, _ in overlays:
-        png.unlink(missing_ok=True)
-    workdir.rmdir()
     if result.returncode != 0:
         out_path.unlink(missing_ok=True)  # 깨진 조각 파일이 목록에 남지 않게
         raise RuntimeError(f"ffmpeg 실패:\n{result.stderr.strip()[-800:]}")
