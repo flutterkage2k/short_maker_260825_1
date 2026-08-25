@@ -40,6 +40,14 @@
   .head-right { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
   button.del { background: #3a2226; color: #ff8f9a; padding: 4px 10px; font-size: 12px; }
   button.del:hover { background: #55282f; }
+  .confirm-del { display: flex; gap: 6px; align-items: center; font-size: 12px;
+                 color: #ff8f9a; white-space: nowrap; }
+  .confirm-del button { padding: 4px 10px; font-size: 12px; }
+  #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
+           background: #262a32; border: 1px solid #3a3f49; color: #e8eaed; font-size: 14px;
+           padding: 10px 18px; border-radius: 10px; opacity: 0; pointer-events: none;
+           transition: all .25s; z-index: 99; max-width: 90vw; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .clips { margin-top: 10px; display: none; }
   .job.open .clips { display: block; }
   .clip { background: #14161a; border: 1px solid #2a2e36; border-radius: 10px;
@@ -287,7 +295,7 @@ async function makeMeta(name, index, btn) {
     lastData = "";
     await refresh();
   } catch (e) {
-    alert("생성 실패: " + e.message);
+    toast("생성 실패: " + e.message);
     btn.disabled = false; btn.textContent = "업로드 정보 생성";
   }
 }
@@ -298,7 +306,7 @@ async function copyText(btn, text) {
     const old = btn.textContent;
     btn.textContent = "복사됨";
     setTimeout(() => { btn.textContent = old; }, 1200);
-  } catch { alert("복사 실패 — 직접 선택해서 복사하세요"); }
+  } catch { toast("복사 실패 — 직접 선택해서 복사하세요"); }
 }
 
 async function cut(name, index, btn) {
@@ -316,7 +324,7 @@ async function cut(name, index, btn) {
     cutting = false;
     await refresh();
   } catch (e) {
-    alert("생성 실패: " + e.message);
+    toast("생성 실패: " + e.message);
   } finally {
     cutting = false;
     btn.disabled = false; btn.textContent = "숏츠 생성";
@@ -351,17 +359,48 @@ function render(data) {
   box.innerHTML = html || '<div class="muted">아직 작업이 없습니다.</div>';
 }
 
-async function deleteJob(event, encName) {
+function toast(msg) {
+  // 앱 내장 브라우저가 alert/confirm 창을 차단해서 페이지 자체 알림 사용
+  let t = document.getElementById("toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "toast";
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+function deleteJob(event, encName) {
   event.stopPropagation(); // 카드 접기/펼치기 안 겹치게
-  const name = decodeURIComponent(encName);
-  if (!confirm(`정말 삭제할 거야?!\n\n"${name}"\n\n작업 폴더와 생성된 영상·자막·업로드 정보가 모두 삭제됩니다.`)) return;
-  try {
-    const res = await fetch(`/api/jobs/${encName}`, { method: "DELETE" });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-    opened.delete(name);
-    lastData = "";
-    refresh();
-  } catch (e) { alert("삭제 실패: " + e.message); }
+  const btn = event.target;
+  const host = btn.closest(".head-right");
+  if (host.querySelector(".confirm-del")) return;
+  btn.style.display = "none";
+  const box = document.createElement("span");
+  box.className = "confirm-del";
+  box.innerHTML = `정말 삭제할 거야?!
+    <button class="del">예, 삭제</button><button class="ghost">아니요</button>`;
+  box.addEventListener("click", (e) => e.stopPropagation());
+  const [yes, no] = box.querySelectorAll("button");
+  yes.onclick = async () => {
+    yes.disabled = true; yes.textContent = "삭제 중...";
+    try {
+      const res = await fetch(`/api/jobs/${encName}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      opened.delete(decodeURIComponent(encName));
+      lastData = "";
+      toast("삭제 완료");
+      refresh();
+    } catch (e) {
+      toast("삭제 실패: " + e.message);
+      box.remove(); btn.style.display = "";
+    }
+  };
+  no.onclick = () => { box.remove(); btn.style.display = ""; };
+  host.appendChild(box);
 }
 
 function toggle(encName) {
@@ -411,7 +450,7 @@ async function openEditor(encName, index) {
     const res = await fetch(`/api/jobs/${encName}/editor/${index}`);
     if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
     data = await res.json();
-  } catch (e) { alert("편집기 열기 실패: " + e.message); return; }
+  } catch (e) { toast("편집기 열기 실패: " + e.message); return; }
   ed = { name, index, clip: data.clip, segments: data.segments,
          style: data.style, edits: new Map() };
 
