@@ -114,6 +114,10 @@
   .segrow input { flex: 1; min-width: 0; padding: 6px 8px; font-size: 13px; }
   .ed-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .vlabel { font-size: 12px; color: #8a919e; margin-top: 10px; }
+  .foot { display: flex; gap: 10px; align-items: center; justify-content: center;
+          margin-top: 28px; color: #8a919e; font-size: 12px; }
+  .foot a { display: flex; align-items: center; opacity: .85; }
+  .foot a:hover { opacity: 1; }
   @media (max-width: 720px) { /* 앱 내장 브라우저 좁은 패널 대응 */
     .ed-box { flex-direction: column; overflow-y: auto; }
     .ed-right { width: auto; max-width: none; }
@@ -142,6 +146,17 @@
     <div class="muted" style="margin-bottom:4px">작업 목록</div>
     <div id="jobs"><div class="muted">아직 작업이 없습니다.</div></div>
   </div>
+
+  <footer class="foot">
+    <span>2026.08 &nbsp;제작 kage2k</span>
+    <a href="https://www.youtube.com/@heesungjin8554" target="_blank" rel="noopener"
+       title="유튜브 채널 바로가기">
+      <svg width="20" height="14" viewBox="0 0 28 20" aria-hidden="true">
+        <rect width="28" height="20" rx="5" fill="#FF0000"/>
+        <path d="M11.5 5.5v9l8-4.5z" fill="#fff"/>
+      </svg>
+    </a>
+  </footer>
 </div>
 
 <div id="modal">
