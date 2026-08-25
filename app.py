@@ -234,6 +234,20 @@ def cut_clip(name: str, req: CutRequest):
     return {"file": f"/output/{name}/clips/{out_path.name}"}
 
 
+@app.delete("/api/jobs/{name}")
+def delete_job(name: str):
+    """작업 폴더 전체 삭제. 다운로드/업로드된 원본도 output 안에 있으면 함께 삭제."""
+    d = job_dir(name)
+    if (d / "source.json").exists():
+        info = json.loads((d / "source.json").read_text(encoding="utf-8"))
+        media = Path(info.get("media", ""))
+        # output/_downloads, output/_uploads 안의 파일만 삭제 — 사용자 원본(temp/ 등)은 안 건드림
+        if media.exists() and media.resolve().parent.parent == OUTPUT_DIR.resolve():
+            media.unlink(missing_ok=True)
+    shutil.rmtree(d)
+    return {"ok": True}
+
+
 class MetaRequest(BaseModel):
     index: int
 

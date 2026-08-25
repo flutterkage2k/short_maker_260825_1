@@ -37,6 +37,9 @@
   .badge.run { background: #2b3a1e; color: #a4d97b; }
   .badge.done { background: #1e2f4a; color: #7aa2ff; }
   .badge.error { background: #46242a; color: #ff8f9a; }
+  .head-right { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+  button.del { background: #3a2226; color: #ff8f9a; padding: 4px 10px; font-size: 12px; }
+  button.del:hover { background: #55282f; }
   .clips { margin-top: 10px; display: none; }
   .job.open .clips { display: block; }
   .clip { background: #14161a; border: 1px solid #2a2e36; border-radius: 10px;
@@ -336,13 +339,29 @@ function render(data) {
       : `<span class="badge done">완료 · 구간 ${j.clips.length}개</span>`;
     html += `<div class="job ${open}" data-name="${esc(j.name)}">
       <div class="job-head" onclick="toggle('${encodeURIComponent(j.name)}')">
-        <span class="job-title">${esc(j.name)}</span>${badge}
+        <span class="job-title">${esc(j.name)}</span>
+        <span class="head-right">${badge}
+          <button class="del" onclick="deleteJob(event, '${encodeURIComponent(j.name)}')">삭제</button>
+        </span>
       </div>
       ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
       <div class="clips">${j.clips.map((c, i) => clipHtml(j, c, i)).join("")}</div>
     </div>`;
   }
   box.innerHTML = html || '<div class="muted">아직 작업이 없습니다.</div>';
+}
+
+async function deleteJob(event, encName) {
+  event.stopPropagation(); // 카드 접기/펼치기 안 겹치게
+  const name = decodeURIComponent(encName);
+  if (!confirm(`정말 삭제할 거야?!\n\n"${name}"\n\n작업 폴더와 생성된 영상·자막·업로드 정보가 모두 삭제됩니다.`)) return;
+  try {
+    const res = await fetch(`/api/jobs/${encName}`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    opened.delete(name);
+    lastData = "";
+    refresh();
+  } catch (e) { alert("삭제 실패: " + e.message); }
 }
 
 function toggle(encName) {
