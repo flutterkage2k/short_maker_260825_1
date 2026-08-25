@@ -96,20 +96,29 @@ hook은 1~10 훅 강도 점수.
 전사본:
 """
 
-def ask_claude_json(prompt: str, pattern: str) -> object:
+def ask_claude_json(prompt: str, pattern: str, retries: int = 1) -> object:
     """Claude Code CLI 호출 후 응답에서 JSON만 추출. 내부서버 이전 시 이 함수만 API 호출로 교체."""
-    result = subprocess.run(
-        ["claude", "-p", "--output-format", "text"],
-        input=prompt,
-        capture_output=True, text=True, timeout=CLAUDE_TIMEOUT_SEC,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"claude 호출 실패:\n{result.stderr.strip()}")
-    raw = result.stdout.strip()
-    match = re.search(pattern, raw, re.DOTALL)  # 앞뒤 잡담이 섞여도 JSON만 추출
-    if not match:
-        raise RuntimeError(f"claude 응답에서 JSON을 찾지 못함:\n{raw[:500]}")
-    return json.loads(match.group(0))
+    last_err = None
+    for _ in range(retries + 1):
+        result = subprocess.run(
+            ["claude", "-p", "--output-format", "text"],
+            input=prompt,
+            capture_output=True, text=True, timeout=CLAUDE_TIMEOUT_SEC,
+        )
+        if result.returncode != 0:
+            last_err = RuntimeError(f"claude 호출 실패:\n{result.stderr.strip()}")
+            continue
+        raw = result.stdout.strip()
+        match = re.search(pattern, raw, re.DOTALL)  # 앞뒤 잡담이 섞여도 JSON만 추출
+        if not match:
+            last_err = RuntimeError(f"claude 응답에서 JSON을 찾지 못함:\n{raw[:500]}")
+            continue
+        text = re.sub(r",\s*([}\]])", r"\1", match.group(0))  # 흔한 형식 오류(끝 쉼표) 정리
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            last_err = RuntimeError(f"claude 응답 JSON 형식 오류: {e}\n{text[:500]}")
+    raise last_err
 
 
 # ponytail: 전사본 전체를 한 번에 전달. 2~3시간급 초장편에서 잘리면 청크 분할 추가.

@@ -337,14 +337,16 @@ function render(data) {
   for (const a of data.active) {
     html += `<div class="job"><div class="job-head">
       <span class="job-title">${esc(a.label)}</span>
-      <span class="badge run"><span class="spin"></span>${a.state_label}</span>
+      <span class="badge run"><span class="spin"></span>${a.state_label} ·
+        <span class="tick" data-t0="${Date.now() - (a.elapsed || 0) * 1000}">${fmt(a.elapsed || 0)}</span></span>
     </div></div>`;
   }
   for (const j of data.jobs) {
     const open = opened.has(j.name) ? "open" : "";
+    const took = j.elapsed ? ` · ${fmt(j.elapsed)} 걸림` : "";
     const badge = j.state === "error"
-      ? `<span class="badge error">오류</span>`
-      : `<span class="badge done">완료 · 구간 ${j.clips.length}개</span>`;
+      ? `<span class="badge error">오류${took}</span>`
+      : `<span class="badge done">완료 · 구간 ${j.clips.length}개${took}</span>`;
     html += `<div class="job ${open}" data-name="${esc(j.name)}">
       <div class="job-head" onclick="toggle('${encodeURIComponent(j.name)}')">
         <span class="job-title">${esc(j.name)}</span>
@@ -414,8 +416,9 @@ async function refresh() {
   if (cutting) return; // 생성 중 목록 갈아엎으면 버튼 상태 날아감
   try {
     const data = await (await fetch("/api/jobs")).json();
-    const s = JSON.stringify(data);
-    if (s === lastData) return; // 변화 없으면 재렌더 안 함(영상 재생 안 끊기게)
+    // elapsed는 매번 변해서 비교에서 제외 — 경과시간만 바뀔 땐 재렌더 안 함(영상 재생 안 끊기게)
+    const s = JSON.stringify(data, (k, v) => (k === "elapsed" ? undefined : v));
+    if (s === lastData) return;
     lastData = s;
     render(data);
   } catch {}
@@ -423,6 +426,11 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, 3000);
+setInterval(() => { // 진행 중 작업의 경과시간 초침 (재렌더 없이 숫자만 갱신)
+  document.querySelectorAll(".tick").forEach((el) => {
+    el.textContent = fmt((Date.now() - Number(el.dataset.t0)) / 1000);
+  });
+}, 1000);
 
 /* ---------- 자막 편집기 ---------- */
 const SCALE = 270 / 1080; // 미리보기:실제 = 1:4

@@ -13,6 +13,7 @@ import os
 import queue
 import shutil
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -45,13 +46,18 @@ active_jobs: dict[str, dict] = {}  # id -> {label, state, error, outdir}
 jobs_lock = threading.Lock()
 
 
-def write_status(outdir: Path, state: str, error: str | None = None):
+def write_status(outdir: Path, state: str, error: str | None = None,
+                 elapsed: int | None = None):
     (outdir / "status.json").write_text(
-        json.dumps({"state": state, "error": error}, ensure_ascii=False), encoding="utf-8")
+        json.dumps({"state": state, "error": error, "elapsed": elapsed},
+                   ensure_ascii=False), encoding="utf-8")
 
 
 def run_job(job: dict):
     jid = job["id"]
+    t0 = time.time()
+    with jobs_lock:
+        active_jobs[jid]["t0"] = t0
 
     def set_state(state, outdir=None, error=None):
         with jobs_lock:
@@ -61,7 +67,8 @@ def run_job(job: dict):
             if outdir:
                 active_jobs[jid]["outdir"] = str(outdir)
         if outdir:
-            write_status(outdir, state, error)
+            elapsed = int(time.time() - t0) if state in ("done", "error") else None
+            write_status(outdir, state, error, elapsed)
 
     outdir = None
     try:
@@ -106,6 +113,23 @@ def worker():
         run_job(job_queue.get())
 
 
+def cleanup_interrupted():
+    """서버 재시작으로 끊긴 작업이 '진행 중'으로 영영 남지 않게 오류로 표시."""
+    if not OUTPUT_DIR.exists():
+        return
+    for d in OUTPUT_DIR.iterdir():
+        status_path = d / "status.json"
+        if not d.is_dir() or d.name.startswith("_") or not status_path.exists():
+            continue
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            status = {"state": "unknown"}
+        if status.get("state") not in ("done", "error"):
+            write_status(d, "error", "서버 재시작으로 작업이 중단됨 — 같은 파일/URL로 다시 분석하세요")
+
+
+cleanup_interrupted()
 threading.Thread(target=worker, daemon=True).start()
 
 
@@ -118,10 +142,12 @@ def job_dir(name: str) -> Path:
 
 @app.get("/api/jobs")
 def list_jobs():
+    now = time.time()
     with jobs_lock:
         active = [
             {"id": j["id"], "label": j["label"], "state": j["state"],
-             "state_label": STATE_LABELS.get(j["state"], j["state"]), "error": j.get("error")}
+             "state_label": STATE_LABELS.get(j["state"], j["state"]), "error": j.get("error"),
+             "elapsed": int(now - j["t0"]) if "t0" in j else 0}
             for j in active_jobs.values()
         ]
     jobs = []
@@ -136,6 +162,7 @@ def list_jobs():
                 continue  # 진행 중인 건 active 목록이 담당
             entry = {"name": d.name, "state": status["state"],
                      "state_label": STATE_LABELS.get(status["state"]), "error": status.get("error"),
+                     "elapsed": status.get("elapsed"),
                      "clips": [], "cuts": {}, "metas": {}}
             if (d / "shorts.json").exists():
                 entry["clips"] = json.loads((d / "shorts.json").read_text(encoding="utf-8"))["clips"]
