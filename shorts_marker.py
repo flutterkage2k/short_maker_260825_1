@@ -36,14 +36,17 @@ def fmt_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
-def download_audio(url: str, workdir: Path) -> Path:
-    """유튜브 URL에서 음성만 내려받아 파일 경로 반환."""
+def download_media(url: str, workdir: Path) -> Path:
+    """유튜브 URL에서 영상(1080p 이하)+음성을 내려받아 파일 경로 반환.
+
+    영상까지 받는 이유: 전사는 음성만으로 되지만 숏츠 자르기에 영상 트랙 필요.
+    """
     workdir.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
             sys.executable, "-m", "yt_dlp",
-            "-f", "bestaudio",
-            "-x", "--audio-format", "m4a",
+            "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+            "--merge-output-format", "mp4",
             "-o", str(workdir / "%(title)s.%(ext)s"),
             "--print", "after_move:filepath",
             "--no-simulate",
@@ -156,8 +159,8 @@ def clips_to_markdown(clips: list[dict], source: str) -> str:
 def process(source: str) -> Path:
     """전체 파이프라인. 결과 폴더 경로 반환. 웹UI가 부를 진입점."""
     if is_url(source):
-        print("유튜브 음성 다운로드 중...")
-        media_path = download_audio(source, OUTPUT_DIR / "_downloads")
+        print("유튜브 다운로드 중...")
+        media_path = download_media(source, OUTPUT_DIR / "_downloads")
     else:
         media_path = Path(source).expanduser().resolve()
         if not media_path.exists():

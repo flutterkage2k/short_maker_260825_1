@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 import cutter
 from shorts_marker import (
-    OUTPUT_DIR, clips_to_markdown, download_audio, generate_metadata, is_url,
+    OUTPUT_DIR, clips_to_markdown, download_media, generate_metadata, is_url,
     safe_name, select_segments, transcribe, transcript_to_text,
 )
 
@@ -68,7 +68,7 @@ def run_job(job: dict):
         source = job["source"]
         if job["kind"] == "url":
             set_state("downloading")
-            media_path = download_audio(source, OUTPUT_DIR / "_downloads")
+            media_path = download_media(source, OUTPUT_DIR / "_downloads")
         else:
             media_path = Path(source)
 

@@ -89,6 +89,15 @@ def make_short(
     segments: 절대 시각 기준 전사 세그먼트(자막용). None이면 자막 없음.
     style: DEFAULT_STYLE 형태. 편집기에서 넘어온 좌표·크기·색 그대로 사용.
     """
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
+         "stream=index", "-of", "csv=p=0", str(source.resolve())],
+        capture_output=True, text=True)
+    if not probe.stdout.strip():
+        raise RuntimeError(
+            "원본에 영상 트랙이 없습니다(음성 전용 파일). "
+            "예전 버전에서 URL로 분석한 작업이면 영상을 다시 분석해 주세요.")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     st = merge_style(style)
     duration = end - start
@@ -144,5 +153,6 @@ def make_short(
         png.unlink(missing_ok=True)
     workdir.rmdir()
     if result.returncode != 0:
+        out_path.unlink(missing_ok=True)  # 깨진 조각 파일이 목록에 남지 않게
         raise RuntimeError(f"ffmpeg 실패:\n{result.stderr.strip()[-800:]}")
     return out_path
