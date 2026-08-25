@@ -1,0 +1,6 @@
+.venv/
+output/
+temp/
+__pycache__/
+.claude/
+.DS_Store

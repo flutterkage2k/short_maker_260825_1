@@ -1,0 +1,294 @@
+"""숏츠 마커 웹UI 서버.
+
+실행:
+    .venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+
+브라우저에서 http://localhost:8000 접속.
+무거운 작업(다운로드·음성인식·구간선정)은 워커 스레드 1개가 순서대로 처리.
+자르기(ffmpeg)는 빨라서 요청 안에서 바로 처리.
+"""
+
+import json
+import os
+import queue
+import shutil
+import threading
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import cutter
+from shorts_marker import (
+    OUTPUT_DIR, clips_to_markdown, download_audio, generate_metadata, is_url,
+    safe_name, select_segments, transcribe, transcript_to_text,
+)
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = OUTPUT_DIR / "_uploads"
+STATE_LABELS = {
+    "queued": "대기 중",
+    "downloading": "유튜브 다운로드 중",
+    "transcribing": "음성 인식 중",
+    "selecting": "숏츠 구간 선정 중",
+    "done": "완료",
+    "error": "오류",
+}
+
+app = FastAPI(title="숏츠 마커")
+
+job_queue: "queue.Queue[dict]" = queue.Queue()
+active_jobs: dict[str, dict] = {}  # id -> {label, state, error, outdir}
+jobs_lock = threading.Lock()
+
+
+def write_status(outdir: Path, state: str, error: str | None = None):
+    (outdir / "status.json").write_text(
+        json.dumps({"state": state, "error": error}, ensure_ascii=False), encoding="utf-8")
+
+
+def run_job(job: dict):
+    jid = job["id"]
+
+    def set_state(state, outdir=None, error=None):
+        with jobs_lock:
+            active_jobs[jid]["state"] = state
+            if error:
+                active_jobs[jid]["error"] = error
+            if outdir:
+                active_jobs[jid]["outdir"] = str(outdir)
+        if outdir:
+            write_status(outdir, state, error)
+
+    outdir = None
+    try:
+        source = job["source"]
+        if job["kind"] == "url":
+            set_state("downloading")
+            media_path = download_audio(source, OUTPUT_DIR / "_downloads")
+        else:
+            media_path = Path(source)
+
+        outdir = OUTPUT_DIR / safe_name(media_path.stem)
+        outdir.mkdir(parents=True, exist_ok=True)
+        with jobs_lock:
+            active_jobs[jid]["label"] = media_path.stem
+        # 원본 위치 기록 — 자르기 단계에서 사용
+        (outdir / "source.json").write_text(
+            json.dumps({"media": str(media_path.resolve()), "input": source},
+                       ensure_ascii=False), encoding="utf-8")
+
+        set_state("transcribing", outdir)
+        transcript = transcribe(media_path)
+        (outdir / "transcript.json").write_text(
+            json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+        (outdir / "transcript.txt").write_text(transcript_to_text(transcript), encoding="utf-8")
+
+        set_state("selecting", outdir)
+        clips = select_segments(transcript_to_text(transcript))
+        (outdir / "shorts.json").write_text(
+            json.dumps({"source": source, "clips": clips}, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+        (outdir / "shorts.md").write_text(clips_to_markdown(clips, source), encoding="utf-8")
+
+        set_state("done", outdir)
+        with jobs_lock:
+            del active_jobs[jid]  # 완료되면 디스크 목록으로 넘어감
+    except Exception as e:  # noqa: BLE001 — 워커는 죽으면 안 됨, 오류는 상태로 보고
+        set_state("error", outdir, error=str(e))
+
+
+def worker():
+    while True:
+        run_job(job_queue.get())
+
+
+threading.Thread(target=worker, daemon=True).start()
+
+
+def job_dir(name: str) -> Path:
+    d = (OUTPUT_DIR / name).resolve()
+    if not d.is_dir() or d.parent != OUTPUT_DIR.resolve():
+        raise HTTPException(404, "작업 없음")
+    return d
+
+
+@app.get("/api/jobs")
+def list_jobs():
+    with jobs_lock:
+        active = [
+            {"id": j["id"], "label": j["label"], "state": j["state"],
+             "state_label": STATE_LABELS.get(j["state"], j["state"]), "error": j.get("error")}
+            for j in active_jobs.values()
+        ]
+    jobs = []
+    if OUTPUT_DIR.exists():
+        for d in sorted(OUTPUT_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            status = {"state": "done", "error": None}
+            if (d / "status.json").exists():
+                status = json.loads((d / "status.json").read_text(encoding="utf-8"))
+            if status["state"] not in ("done", "error"):
+                continue  # 진행 중인 건 active 목록이 담당
+            entry = {"name": d.name, "state": status["state"],
+                     "state_label": STATE_LABELS.get(status["state"]), "error": status.get("error"),
+                     "clips": [], "cuts": {}, "metas": {}}
+            if (d / "shorts.json").exists():
+                entry["clips"] = json.loads((d / "shorts.json").read_text(encoding="utf-8"))["clips"]
+                clips_dir = d / "clips"
+                if clips_dir.exists():
+                    for f in clips_dir.glob("clip_*.mp4"):
+                        idx = f.stem.split("_")[1]
+                        entry["cuts"].setdefault(idx, []).append(f"/output/{d.name}/clips/{f.name}")
+                    for f in clips_dir.glob("meta_*.json"):
+                        idx = f.stem.split("_")[1]
+                        entry["metas"][idx] = json.loads(f.read_text(encoding="utf-8"))
+            jobs.append(entry)
+    return {"active": active, "jobs": jobs}
+
+
+@app.post("/api/jobs")
+async def create_job(file: UploadFile | None = None, url: str = Form("")):
+    url = url.strip()
+    if file and file.filename:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        orig = Path(file.filename)
+        dest = UPLOAD_DIR / (safe_name(orig.stem) + orig.suffix)
+        with dest.open("wb") as f:
+            while chunk := await file.read(1 << 20):
+                f.write(chunk)
+        job = {"id": uuid.uuid4().hex[:8], "kind": "file", "source": str(dest),
+               "label": dest.stem, "state": "queued"}
+    elif is_url(url):
+        job = {"id": uuid.uuid4().hex[:8], "kind": "url", "source": url,
+               "label": url, "state": "queued"}
+    else:
+        raise HTTPException(400, "파일 또는 유튜브 URL을 입력하세요")
+    with jobs_lock:
+        active_jobs[job["id"]] = job
+    job_queue.put(job)
+    return {"id": job["id"]}
+
+
+def get_source_media(d: Path) -> Path:
+    info = json.loads((d / "source.json").read_text(encoding="utf-8")) \
+        if (d / "source.json").exists() else None
+    if not info or not Path(info["media"]).exists():
+        raise HTTPException(409, "원본 파일을 찾을 수 없음 (CLI로 처리한 옛 작업은 원본 경로 기록이 없습니다)")
+    return Path(info["media"])
+
+
+def load_clip(d: Path, index: int) -> dict:
+    shorts = json.loads((d / "shorts.json").read_text(encoding="utf-8"))
+    if not 0 <= index < len(shorts["clips"]):
+        raise HTTPException(400, "구간 번호가 잘못됨")
+    return shorts["clips"][index]
+
+
+class TranscriptEdit(BaseModel):
+    i: int      # transcript.json segments 전체 기준 인덱스
+    text: str
+
+
+class CutRequest(BaseModel):
+    index: int                       # clips 배열 기준 0부터
+    subtitles: bool = True
+    style: dict | None = None        # 편집기 스타일. 있으면 저장 후 사용
+    edits: list[TranscriptEdit] = [] # 자막 오타 수정 (전사본에 반영)
+
+
+@app.post("/api/jobs/{name}/cut")
+def cut_clip(name: str, req: CutRequest):
+    d = job_dir(name)
+    clip = load_clip(d, req.index)
+    media = get_source_media(d)
+
+    transcript = json.loads((d / "transcript.json").read_text(encoding="utf-8"))
+    if req.edits:  # 오타 수정은 전사본 원본에 반영 — 다른 구간에도 적용됨
+        from shorts_marker import transcript_to_text
+        for e in req.edits:
+            if 0 <= e.i < len(transcript["segments"]):
+                transcript["segments"][e.i]["text"] = e.text.strip()
+        (d / "transcript.json").write_text(
+            json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+        (d / "transcript.txt").write_text(transcript_to_text(transcript), encoding="utf-8")
+
+    if req.style is not None:  # 편집기 경로: 스타일 저장 + 적용
+        style = cutter.merge_style(req.style)
+        (d / "clips").mkdir(exist_ok=True)
+        (d / "clips" / f"style_{req.index + 1}.json").write_text(
+            json.dumps(style, ensure_ascii=False, indent=2), encoding="utf-8")
+        segments = transcript["segments"] if style["subs"]["enabled"] else None
+        out_path = d / "clips" / f"clip_{req.index + 1}_edit.mp4"
+        cutter.make_short(media, clip["start_sec"], clip["end_sec"], out_path,
+                          segments, style)
+    else:  # 목록의 빠른 생성 버튼 경로
+        segments = transcript["segments"] if req.subtitles else None
+        suffix = "_sub" if req.subtitles else ""
+        out_path = d / "clips" / f"clip_{req.index + 1}{suffix}.mp4"
+        cutter.make_short(media, clip["start_sec"], clip["end_sec"], out_path, segments)
+    return {"file": f"/output/{name}/clips/{out_path.name}"}
+
+
+class MetaRequest(BaseModel):
+    index: int
+
+
+@app.post("/api/jobs/{name}/meta")
+def make_meta(name: str, req: MetaRequest):
+    """구간별 업로드 정보(제목 3안·설명·태그) 생성. claude 호출이라 수십 초 걸림."""
+    d = job_dir(name)
+    clip = load_clip(d, req.index)
+    segments = json.loads((d / "transcript.json").read_text(encoding="utf-8"))["segments"]
+    script = "\n".join(s["text"] for s in segments
+                       if s["end"] > clip["start_sec"] and s["start"] < clip["end_sec"])
+    meta = generate_metadata(clip, script)
+    (d / "clips").mkdir(exist_ok=True)
+    (d / "clips" / f"meta_{req.index + 1}.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return meta
+
+
+@app.get("/api/jobs/{name}/editor/{index}")
+def editor_data(name: str, index: int):
+    """자막 편집기 초기 데이터: 미리보기 미디어 URL, 구간 자막, 저장된 스타일."""
+    d = job_dir(name)
+    clip = load_clip(d, index)
+    media = get_source_media(d)
+
+    # 미리보기용: 원본을 작업 폴더에 심볼릭 링크 → /output 정적 서빙(구간 탐색 지원)
+    link = d / f"source{media.suffix}"
+    if not link.exists():
+        try:
+            os.symlink(media.resolve(), link)
+        except OSError:
+            shutil.copy2(media, link)
+
+    segments = json.loads((d / "transcript.json").read_text(encoding="utf-8"))["segments"]
+    segs = [{"i": i, "start": s["start"], "end": s["end"], "text": s["text"]}
+            for i, s in enumerate(segments)
+            if s["end"] > clip["start_sec"] and s["start"] < clip["end_sec"]]
+
+    style_path = d / "clips" / f"style_{index + 1}.json"
+    if style_path.exists():
+        # merge_style: 예전에 저장된 스타일에 새로 생긴 요소(cta 등) 기본값 채움
+        style = cutter.merge_style(json.loads(style_path.read_text(encoding="utf-8")))
+    else:
+        style = cutter.merge_style(None)
+        style["title"]["enabled"] = True
+        style["title"]["text"] = clip.get("title", "")
+    return {"clip": clip, "media_url": f"/output/{name}/{link.name}",
+            "segments": segs, "style": style}
+
+
+@app.get("/")
+def index():
+    return FileResponse(BASE_DIR / "static" / "index.html")
+
+
+OUTPUT_DIR.mkdir(exist_ok=True)
+app.mount("/output", StaticFiles(directory=OUTPUT_DIR, follow_symlink=True), name="output")

@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>숏츠 마커</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #14161a; color: #e8eaed;
+         font-family: "Apple SD Gothic Neo", system-ui, sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 22px; margin: 0 0 20px; }
+  h1 span { color: #7aa2ff; }
+  .panel { background: #1d2026; border: 1px solid #2a2e36; border-radius: 12px;
+           padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text] { flex: 1; min-width: 240px; background: #14161a; color: #e8eaed;
+           border: 1px solid #2a2e36; border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  button { background: #3459c7; color: #fff; border: 0; border-radius: 8px;
+           padding: 10px 16px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #4066dd; }
+  button:disabled { background: #3a3f49; cursor: default; }
+  button.ghost { background: #262a32; }
+  button.ghost:hover { background: #303540; }
+  .muted { color: #8a919e; font-size: 13px; }
+  .file-label { display: inline-block; background: #262a32; border-radius: 8px;
+                padding: 10px 14px; cursor: pointer; font-size: 14px; }
+  .file-label:hover { background: #303540; }
+  #fileName { margin-left: 6px; }
+  .job { border-top: 1px solid #2a2e36; padding: 14px 0; }
+  .job:first-child { border-top: 0; }
+  .job-head { display: flex; justify-content: space-between; gap: 10px; align-items: center;
+              cursor: pointer; }
+  .job-title { font-weight: 600; font-size: 15px; word-break: break-all; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .badge.run { background: #2b3a1e; color: #a4d97b; }
+  .badge.done { background: #1e2f4a; color: #7aa2ff; }
+  .badge.error { background: #46242a; color: #ff8f9a; }
+  .clips { margin-top: 10px; display: none; }
+  .job.open .clips { display: block; }
+  .clip { background: #14161a; border: 1px solid #2a2e36; border-radius: 10px;
+          padding: 12px; margin-top: 10px; }
+  .clip-top { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .clip h3 { margin: 0; font-size: 14px; }
+  .clip .time { color: #7aa2ff; font-size: 13px; white-space: nowrap; }
+  .clip p { margin: 8px 0; font-size: 13px; color: #b6bcc6; }
+  .clip .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  label.chk { font-size: 13px; color: #b6bcc6; display: flex; gap: 4px; align-items: center; }
+  video.result { width: 100%; max-width: 270px; border-radius: 8px; margin-top: 10px;
+          display: block; background: #000; }
+  a.dl { color: #7aa2ff; font-size: 13px; }
+  .err { color: #ff8f9a; font-size: 13px; margin-top: 6px; word-break: break-all; }
+  .meta { background: #1a1d23; border: 1px solid #2a2e36; border-radius: 8px;
+          padding: 10px 12px; margin-top: 10px; }
+  .meta h4 { margin: 8px 0 4px; font-size: 12px; color: #8a919e; }
+  .meta h4:first-child { margin-top: 0; }
+  .mrow { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between;
+          font-size: 13px; color: #d5d9e0; padding: 3px 0; }
+  .mrow pre { margin: 0; white-space: pre-wrap; font-family: inherit; flex: 1; }
+  .mrow span { flex: 1; word-break: break-all; }
+  button.mcopy { padding: 4px 10px; font-size: 12px; flex: 0 0 auto; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid #a4d97b;
+          border-top-color: transparent; border-radius: 50%; animation: r 0.8s linear infinite;
+          vertical-align: -2px; margin-right: 6px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+
+  /* ---------- 자막 편집기 ---------- */
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none;
+           align-items: center; justify-content: center; z-index: 10; }
+  #modal.show { display: flex; }
+  .ed-box { background: #1d2026; border: 1px solid #2a2e36; border-radius: 14px;
+            padding: 16px; display: flex; gap: 16px; max-height: 92vh; max-width: 96vw; }
+  .ed-left { flex: 0 0 auto; }
+  #canvas { position: relative; width: 270px; height: 480px; background: #000;
+            border-radius: 8px; overflow: hidden; user-select: none; }
+  #edv { position: absolute; left: 0; width: 270px; }
+  .ov { position: absolute; left: 0; width: 100%; text-align: center; cursor: grab;
+        font-family: "Apple SD Gothic Neo"; font-weight: 800; line-height: 1.24;
+        white-space: pre-wrap; word-break: keep-all; padding: 0 14px; }
+  .ov:active { cursor: grabbing; }
+  .ov.dragging { outline: 1px dashed #7aa2ff; }
+  .ed-playrow { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .ed-right { width: 380px; max-width: 50vw; overflow-y: auto; display: flex;
+              flex-direction: column; gap: 12px; }
+  .ed-right h4 { margin: 0 0 6px; font-size: 13px; color: #8a919e; font-weight: 600; }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .presets button { padding: 7px 10px; font-size: 13px; }
+  .ctl { background: #14161a; border: 1px solid #2a2e36; border-radius: 10px; padding: 10px; }
+  .ctl .row { margin-top: 8px; }
+  .ctl .row:first-child { margin-top: 0; }
+  .ctl input[type=text] { min-width: 0; }
+  .ctl input[type=range] { flex: 1; }
+  .ctl input[type=color] { width: 34px; height: 26px; border: 0; background: none;
+                           padding: 0; cursor: pointer; }
+  .ctl .lab { font-size: 12px; color: #8a919e; white-space: nowrap; }
+  #segList { display: flex; flex-direction: column; gap: 6px; max-height: 200px;
+             overflow-y: auto; }
+  .segrow { display: flex; gap: 6px; align-items: center; }
+  .segrow .t { font-size: 11px; color: #7aa2ff; white-space: nowrap; width: 40px; }
+  .segrow input { flex: 1; min-width: 0; padding: 6px 8px; font-size: 13px; }
+  .ed-actions { display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span>숏츠</span> 마커</h1>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <label class="file-label">영상 파일 선택
+        <input type="file" id="file" accept="video/*,audio/*" style="display:none">
+      </label>
+      <span id="fileName" class="muted">선택 안 함</span>
+    </div>
+    <div class="row">
+      <input type="text" id="url" placeholder="또는 유튜브 URL 붙여넣기">
+      <button id="go">분석 시작</button>
+    </div>
+    <div id="formErr" class="err"></div>
+  </div>
+
+  <div class="panel">
+    <div class="muted" style="margin-bottom:4px">작업 목록</div>
+    <div id="jobs"><div class="muted">아직 작업이 없습니다.</div></div>
+  </div>
+</div>
+
+<div id="modal">
+  <div class="ed-box">
+    <div class="ed-left">
+      <div id="canvas">
+        <video id="edv" playsinline></video>
+        <div class="ov" id="ovTitle"></div>
+        <div class="ov" id="ovSub"></div>
+        <div class="ov" id="ovCta"></div>
+      </div>
+      <div class="ed-playrow">
+        <button class="ghost" id="edPlay">재생</button>
+        <span class="muted" id="edTime"></span>
+      </div>
+    </div>
+    <div class="ed-right">
+      <div>
+        <h4>레이아웃 템플릿</h4>
+        <div class="presets" id="presets"></div>
+      </div>
+      <div class="ctl" id="ctlTitle">
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="tOn"> 상단 타이틀(후킹 멘트)</label>
+        </div>
+        <div class="row"><input type="text" id="tText" placeholder="후킹 멘트 입력"></div>
+        <div class="row">
+          <span class="lab">크기</span><input type="range" id="tSize" min="40" max="130">
+          <span class="lab">글자</span><input type="color" id="tColor">
+          <span class="lab">테두리</span><input type="color" id="tOutline">
+        </div>
+      </div>
+      <div class="ctl" id="ctlSub">
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="sOn"> 하단 자막</label>
+        </div>
+        <div class="row">
+          <span class="lab">크기</span><input type="range" id="sSize" min="34" max="100">
+          <span class="lab">글자</span><input type="color" id="sColor">
+          <span class="lab">테두리</span><input type="color" id="sOutline">
+        </div>
+      </div>
+      <div class="ctl" id="ctlCta">
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="cOn"> 마지막 CTA (루프 안 깨는 문구)</label>
+        </div>
+        <div class="row"><input type="text" id="cText" placeholder="예: 풀영상은 채널에서"></div>
+        <div class="row">
+          <span class="lab">크기</span><input type="range" id="cSize" min="30" max="90">
+          <span class="lab">글자</span><input type="color" id="cColor">
+          <span class="lab">테두리</span><input type="color" id="cOutline">
+          <span class="lab">표시</span>
+          <input type="number" id="cLast" min="1" max="10" style="width:52px;background:#14161a;
+            color:#e8eaed;border:1px solid #2a2e36;border-radius:6px;padding:6px">
+          <span class="lab">초</span>
+        </div>
+      </div>
+      <div class="ctl">
+        <h4>자막 내용 수정 (오인식 교정 — 전체 전사본에 반영)</h4>
+        <div id="segList"></div>
+      </div>
+      <div class="ed-actions">
+        <button class="ghost" id="edClose">닫기</button>
+        <button id="edMake">숏츠 생성</button>
+      </div>
+      <div class="err" id="edErr"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const opened = new Set();
+let cutting = false;
+
+$("#file").addEventListener("change", () => {
+  $("#fileName").textContent = $("#file").files[0]?.name || "선택 안 함";
+});
+
+$("#go").addEventListener("click", async () => {
+  const fd = new FormData();
+  const f = $("#file").files[0];
+  if (f) fd.append("file", f);
+  fd.append("url", $("#url").value);
+  $("#go").disabled = true;
+  $("#go").textContent = f ? "업로드 중..." : "등록 중...";
+  $("#formErr").textContent = "";
+  try {
+    const res = await fetch("/api/jobs", { method: "POST", body: fd });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    $("#file").value = ""; $("#url").value = "";
+    $("#fileName").textContent = "선택 안 함";
+    lastData = ""; refresh();
+  } catch (e) {
+    $("#formErr").textContent = e.message;
+  } finally {
+    $("#go").disabled = false;
+    $("#go").textContent = "분석 시작";
+  }
+});
+
+function fmt(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+function esc(s) {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function metaHtml(m) {
+  if (!m) return "";
+  const titles = m.titles.map((t) =>
+    `<div class="mrow"><span>${esc(t)}</span>
+     <button class="ghost mcopy" onclick="copyText(this, ${JSON.stringify(t).replaceAll('"', "&quot;")})">복사</button></div>`).join("");
+  const tags = m.tags.join(", ");
+  return `<div class="meta">
+    <h4>제목 3안</h4>${titles}
+    <h4>설명</h4>
+    <div class="mrow"><pre>${esc(m.description)}</pre>
+      <button class="ghost mcopy" onclick="copyText(this, ${JSON.stringify(m.description).replaceAll('"', "&quot;")})">복사</button></div>
+    <h4>태그</h4>
+    <div class="mrow"><span>${esc(tags)}</span>
+      <button class="ghost mcopy" onclick="copyText(this, ${JSON.stringify(tags).replaceAll('"', "&quot;")})">복사</button></div>
+  </div>`;
+}
+
+function clipHtml(job, c, i) {
+  const cuts = (job.cuts && job.cuts[String(i + 1)]) || [];
+  const meta = job.metas && job.metas[String(i + 1)];
+  const dur = Math.round(c.end_sec - c.start_sec);
+  const jn = encodeURIComponent(job.name);
+  return `<div class="clip">
+    <div class="clip-top">
+      <h3>${i + 1}. ${esc(c.title)}</h3>
+      <span class="time">${fmt(c.start_sec)} ~ ${fmt(c.end_sec)} · ${dur}초 · 훅 ${c.hook ?? "?"}/10</span>
+    </div>
+    <p>${esc(c.reason)}</p>
+    <div class="actions">
+      <label class="chk"><input type="checkbox" checked data-subs> 자막 넣기</label>
+      <button class="ghost" onclick="cut('${jn}', ${i}, this)">숏츠 생성</button>
+      <button onclick="openEditor('${jn}', ${i})">자막 편집</button>
+      <button class="ghost" onclick="makeMeta('${jn}', ${i}, this)">${meta ? "업로드 정보 다시 생성" : "업로드 정보 생성"}</button>
+    </div>
+    ${metaHtml(meta)}
+    ${cuts.map((u) => `<video class="result" src="${u}" controls preload="metadata"></video>
+      <a class="dl" href="${u}" download>다운로드: ${u.split("/").pop()}</a>`).join("")}
+  </div>`;
+}
+
+async function makeMeta(name, index, btn) {
+  btn.disabled = true; btn.textContent = "생성 중... (수십 초)";
+  try {
+    const res = await fetch(`/api/jobs/${name}/meta`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    lastData = "";
+    await refresh();
+  } catch (e) {
+    alert("생성 실패: " + e.message);
+    btn.disabled = false; btn.textContent = "업로드 정보 생성";
+  }
+}
+
+async function copyText(btn, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const old = btn.textContent;
+    btn.textContent = "복사됨";
+    setTimeout(() => { btn.textContent = old; }, 1200);
+  } catch { alert("복사 실패 — 직접 선택해서 복사하세요"); }
+}
+
+async function cut(name, index, btn) {
+  if (cutting) return;
+  cutting = true;
+  const subs = btn.parentElement.querySelector("[data-subs]").checked;
+  btn.disabled = true; btn.textContent = "생성 중...";
+  try {
+    const res = await fetch(`/api/jobs/${name}/cut`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index, subtitles: subs }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    lastData = "";
+    cutting = false;
+    await refresh();
+  } catch (e) {
+    alert("생성 실패: " + e.message);
+  } finally {
+    cutting = false;
+    btn.disabled = false; btn.textContent = "숏츠 생성";
+  }
+}
+
+function render(data) {
+  const box = $("#jobs");
+  let html = "";
+  for (const a of data.active) {
+    html += `<div class="job"><div class="job-head">
+      <span class="job-title">${esc(a.label)}</span>
+      <span class="badge run"><span class="spin"></span>${a.state_label}</span>
+    </div></div>`;
+  }
+  for (const j of data.jobs) {
+    const open = opened.has(j.name) ? "open" : "";
+    const badge = j.state === "error"
+      ? `<span class="badge error">오류</span>`
+      : `<span class="badge done">완료 · 구간 ${j.clips.length}개</span>`;
+    html += `<div class="job ${open}" data-name="${esc(j.name)}">
+      <div class="job-head" onclick="toggle('${encodeURIComponent(j.name)}')">
+        <span class="job-title">${esc(j.name)}</span>${badge}
+      </div>
+      ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
+      <div class="clips">${j.clips.map((c, i) => clipHtml(j, c, i)).join("")}</div>
+    </div>`;
+  }
+  box.innerHTML = html || '<div class="muted">아직 작업이 없습니다.</div>';
+}
+
+function toggle(encName) {
+  const name = decodeURIComponent(encName);
+  opened.has(name) ? opened.delete(name) : opened.add(name);
+  document.querySelector(`.job[data-name="${CSS.escape(name)}"]`)?.classList.toggle("open");
+}
+
+let lastData = "";
+async function refresh() {
+  if (cutting) return; // 생성 중 목록 갈아엎으면 버튼 상태 날아감
+  try {
+    const data = await (await fetch("/api/jobs")).json();
+    const s = JSON.stringify(data);
+    if (s === lastData) return; // 변화 없으면 재렌더 안 함(영상 재생 안 끊기게)
+    lastData = s;
+    render(data);
+  } catch {}
+}
+
+refresh();
+setInterval(refresh, 3000);
+
+/* ---------- 자막 편집기 ---------- */
+const SCALE = 270 / 1080; // 미리보기:실제 = 1:4
+const PRESETS = [
+  { name: "타이틀+자막", title: { enabled: true, y: 170, size: 76, color: "#FFD400", outline: "#000000" },
+    subs: { enabled: true, y: 1330, size: 58, color: "#FFFFFF", outline: "#000000" } },
+  { name: "자막만", title: { enabled: false },
+    subs: { enabled: true, y: 1330, size: 58, color: "#FFFFFF", outline: "#000000" } },
+  { name: "영상 위 자막", title: { enabled: true, y: 170, size: 76, color: "#FFD400", outline: "#000000" },
+    subs: { enabled: true, y: 1130, size: 52, color: "#FFFFFF", outline: "#000000" } },
+  { name: "타이틀만", title: { enabled: true, y: 170, size: 84, color: "#FFD400", outline: "#000000" },
+    subs: { enabled: false } },
+];
+
+let ed = null; // {name, index, clip, segments, style, edits:Map}
+const edv = $("#edv");
+
+$("#presets").innerHTML = PRESETS.map((p, i) =>
+  `<button class="ghost" onclick="applyPreset(${i})">${p.name}</button>`).join("");
+
+async function openEditor(encName, index) {
+  const name = decodeURIComponent(encName);
+  let data;
+  try {
+    const res = await fetch(`/api/jobs/${encName}/editor/${index}`);
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    data = await res.json();
+  } catch (e) { alert("편집기 열기 실패: " + e.message); return; }
+  ed = { name, index, clip: data.clip, segments: data.segments,
+         style: data.style, edits: new Map() };
+
+  edv.src = data.media_url;
+  edv.addEventListener("loadedmetadata", positionVideo, { once: true });
+  edv.currentTime = ed.clip.start_sec;
+
+  $("#tOn").checked = ed.style.title.enabled;
+  $("#tText").value = ed.style.title.text || "";
+  $("#tSize").value = ed.style.title.size;
+  $("#tColor").value = ed.style.title.color;
+  $("#tOutline").value = ed.style.title.outline;
+  $("#sOn").checked = ed.style.subs.enabled;
+  $("#sSize").value = ed.style.subs.size;
+  $("#sColor").value = ed.style.subs.color;
+  $("#sOutline").value = ed.style.subs.outline;
+  $("#cOn").checked = ed.style.cta.enabled;
+  $("#cText").value = ed.style.cta.text || "";
+  $("#cSize").value = ed.style.cta.size;
+  $("#cColor").value = ed.style.cta.color;
+  $("#cOutline").value = ed.style.cta.outline;
+  $("#cLast").value = ed.style.cta.last_sec;
+
+  $("#segList").innerHTML = ed.segments.map((s) =>
+    `<div class="segrow"><span class="t">${fmt(s.start)}</span>
+     <input type="text" data-seg="${s.i}" value="${esc(s.text)}"></div>`).join("");
+  $("#segList").querySelectorAll("input").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const i = Number(inp.dataset.seg);
+      ed.edits.set(i, inp.value);
+      const seg = ed.segments.find((s) => s.i === i);
+      if (seg) seg.text = inp.value;
+      updateOverlays();
+    });
+  });
+
+  $("#edErr").textContent = "";
+  $("#edMake").disabled = false; $("#edMake").textContent = "숏츠 생성";
+  applyStyleToUI();
+  $("#modal").classList.add("show");
+}
+
+function positionVideo() {
+  const h = 270 / (edv.videoWidth / edv.videoHeight || 16 / 9);
+  edv.style.height = `${Math.min(h, 480)}px`;
+  edv.style.top = `${(480 - Math.min(h, 480)) / 2}px`;
+}
+
+function readControls() {
+  Object.assign(ed.style.title, {
+    enabled: $("#tOn").checked, text: $("#tText").value,
+    size: Number($("#tSize").value), color: $("#tColor").value,
+    outline: $("#tOutline").value,
+  });
+  Object.assign(ed.style.subs, {
+    enabled: $("#sOn").checked, size: Number($("#sSize").value),
+    color: $("#sColor").value, outline: $("#sOutline").value,
+  });
+  Object.assign(ed.style.cta, {
+    enabled: $("#cOn").checked, text: $("#cText").value,
+    size: Number($("#cSize").value), color: $("#cColor").value,
+    outline: $("#cOutline").value, last_sec: Number($("#cLast").value) || 3,
+  });
+  applyStyleToUI();
+}
+["tOn", "tText", "tSize", "tColor", "tOutline", "sOn", "sSize", "sColor", "sOutline",
+ "cOn", "cText", "cSize", "cColor", "cOutline", "cLast"]
+  .forEach((id) => $("#" + id).addEventListener("input", readControls));
+
+function styleOverlay(el, conf) {
+  el.style.display = conf.enabled ? "" : "none";
+  el.style.top = `${conf.y * SCALE}px`;
+  el.style.fontSize = `${conf.size * SCALE}px`;
+  el.style.color = conf.color;
+  const w = Math.max(3, Math.floor(conf.size / 15)) * SCALE;
+  el.style.webkitTextStroke = `${w}px ${conf.outline}`;
+  el.style.paintOrder = "stroke fill";
+}
+
+function applyStyleToUI() {
+  styleOverlay($("#ovTitle"), ed.style.title);
+  styleOverlay($("#ovSub"), ed.style.subs);
+  styleOverlay($("#ovCta"), ed.style.cta);
+  updateOverlays();
+}
+
+function updateOverlays() {
+  if (!ed) return;
+  $("#ovTitle").textContent = ed.style.title.text || "";
+  const t = edv.currentTime;
+  const seg = ed.segments.find((s) => t >= s.start && t < s.end);
+  $("#ovSub").textContent = seg ? seg.text : "";
+  // 일시정지 중엔 항상 표시(드래그로 위치 잡기 편하게), 재생 중엔 실제 타이밍대로
+  const showCta = ed.style.cta.enabled &&
+    (edv.paused || t >= ed.clip.end_sec - (ed.style.cta.last_sec || 3));
+  $("#ovCta").textContent = showCta ? ed.style.cta.text : "";
+  $("#edTime").textContent =
+    `${fmt(Math.max(0, t - ed.clip.start_sec))} / ${fmt(ed.clip.end_sec - ed.clip.start_sec)}`;
+}
+
+edv.addEventListener("timeupdate", () => {
+  if (!ed) return;
+  if (edv.currentTime >= ed.clip.end_sec) {
+    edv.currentTime = ed.clip.start_sec; // 구간 반복
+  }
+  updateOverlays();
+});
+
+$("#edPlay").addEventListener("click", () => {
+  if (edv.paused) { edv.play(); $("#edPlay").textContent = "일시정지"; }
+  else { edv.pause(); $("#edPlay").textContent = "재생"; }
+});
+
+function applyPreset(i) {
+  const p = PRESETS[i];
+  const keep = ed.style.title.text;
+  ed.style.title = { ...ed.style.title, ...p.title };
+  ed.style.subs = { ...ed.style.subs, ...p.subs };
+  ed.style.title.text = keep;
+  $("#tOn").checked = ed.style.title.enabled;
+  $("#tSize").value = ed.style.title.size;
+  $("#tColor").value = ed.style.title.color;
+  $("#tOutline").value = ed.style.title.outline;
+  $("#sOn").checked = ed.style.subs.enabled;
+  $("#sSize").value = ed.style.subs.size;
+  $("#sColor").value = ed.style.subs.color;
+  $("#sOutline").value = ed.style.subs.outline;
+  applyStyleToUI();
+}
+
+/* 드래그로 세로 위치 조절 (가로는 항상 중앙 정렬) */
+function makeDraggable(el, conf) {
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add("dragging");
+    const startY = e.clientY, startTop = conf().y * SCALE;
+    const move = (ev) => {
+      const top = Math.min(480 - 20, Math.max(0, startTop + ev.clientY - startY));
+      conf().y = Math.round(top / SCALE);
+      el.style.top = `${top}px`;
+    };
+    const up = () => {
+      el.classList.remove("dragging");
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  });
+}
+makeDraggable($("#ovTitle"), () => ed.style.title);
+makeDraggable($("#ovSub"), () => ed.style.subs);
+makeDraggable($("#ovCta"), () => ed.style.cta);
+
+$("#edClose").addEventListener("click", () => {
+  edv.pause(); $("#edPlay").textContent = "재생";
+  $("#modal").classList.remove("show");
+  ed = null;
+});
+
+$("#edMake").addEventListener("click", async () => {
+  if (!ed || cutting) return;
+  cutting = true;
+  const btn = $("#edMake");
+  btn.disabled = true; btn.textContent = "생성 중...";
+  $("#edErr").textContent = "";
+  try {
+    const edits = [...ed.edits].map(([i, text]) => ({ i, text }));
+    const res = await fetch(`/api/jobs/${encodeURIComponent(ed.name)}/cut`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: ed.index, style: ed.style, edits }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    edv.pause(); $("#edPlay").textContent = "재생";
+    $("#modal").classList.remove("show");
+    ed = null;
+    lastData = ""; cutting = false;
+    await refresh();
+  } catch (e) {
+    $("#edErr").textContent = "생성 실패: " + e.message;
+  } finally {
+    cutting = false;
+    btn.disabled = false; btn.textContent = "숏츠 생성";
+  }
+});
+</script>
+</body>
+</html>
