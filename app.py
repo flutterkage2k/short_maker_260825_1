@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -138,8 +139,43 @@ def cleanup_interrupted():
             write_status(d, "error", "서버 재시작으로 작업이 중단됨 — 같은 파일/URL로 다시 분석하세요")
 
 
+# Claude 연결 점검 — 이 서버의 claude 호출은 서버가 도는 컴퓨터의 로그인 계정(구독)을 쓴다
+CLAUDE_STATUS = {
+    "installed": None,
+    "api_key_set": bool(os.environ.get("ANTHROPIC_API_KEY")),  # 설정 시 크레딧 과금 위험
+    "login": "checking",  # checking | ok | fail
+    "detail": "",
+}
+
+
+def check_claude():
+    if not shutil.which("claude"):
+        CLAUDE_STATUS.update(installed=False, login="fail",
+                             detail="claude 명령을 찾을 수 없음")
+        return
+    CLAUDE_STATUS["installed"] = True
+    try:  # 로그인 유효성은 실제 호출로만 확인 가능 — 아주 짧은 호출 1회
+        r = subprocess.run(
+            ["claude", "-p", "--output-format", "text"],
+            input="OK라고 한 단어만 답해.",
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode == 0:
+            CLAUDE_STATUS["login"] = "ok"
+        else:
+            CLAUDE_STATUS.update(login="fail", detail=r.stderr.strip()[-300:])
+    except Exception as e:  # noqa: BLE001
+        CLAUDE_STATUS.update(login="fail", detail=str(e))
+
+
+@app.get("/api/health")
+def health():
+    return CLAUDE_STATUS
+
+
 cleanup_interrupted()
 threading.Thread(target=worker, daemon=True).start()
+threading.Thread(target=check_claude, daemon=True).start()
 
 
 def job_dir(name: str) -> Path:
