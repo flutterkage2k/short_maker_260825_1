@@ -76,6 +76,19 @@
           vertical-align: -2px; margin-right: 6px; }
   @keyframes r { to { transform: rotate(360deg); } }
 
+  /* ---------- 사용 전 안내 ---------- */
+  #gate { position: fixed; inset: 0; background: #14161a; z-index: 20; display: none;
+          align-items: center; justify-content: center; padding: 16px; overflow-y: auto; }
+  #gate.show { display: flex; }
+  .gate-box { max-width: 560px; background: #1d2026; border: 1px solid #2a2e36;
+              border-radius: 14px; padding: 24px; }
+  .gate-box h2 { margin: 0 0 14px; font-size: 18px; }
+  .gate-box ul { margin: 0 0 18px; padding-left: 18px; display: flex;
+                 flex-direction: column; gap: 10px; font-size: 14px; color: #b6bcc6;
+                 line-height: 1.5; }
+  .gate-box b { color: #e8eaed; }
+  .gate-box button { width: 100%; padding: 12px; font-size: 15px; }
+
   /* ---------- 자막 편집기 ---------- */
   #modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none;
            align-items: center; justify-content: center; z-index: 10; }
@@ -157,6 +170,24 @@
       </svg>
     </a>
   </footer>
+</div>
+
+<div id="gate">
+  <div class="gate-box">
+    <h2>⚠️ 사용 전 반드시 읽을 것</h2>
+    <ul>
+      <li><b>내부망 전용 도구입니다.</b> 인터넷에 공개된 서버에 올리지 마세요.
+          로그인·인증이 없고, 삭제 기능은 작업 폴더를 통째로 지웁니다.</li>
+      <li><b>Claude 유료 구독 + Claude Code CLI 로그인이 필요합니다.</b>
+          구간 선정·업로드 정보 생성 사용량은 본인 구독에서 차감됩니다.</li>
+      <li><b>애플 실리콘 맥 전용입니다.</b> 음성 인식이 다른 플랫폼에서 동작하지 않습니다.</li>
+      <li><b>저작권은 사용자 책임입니다.</b> 본인 영상 또는 권리를 확보한 영상에만
+          사용하세요. 결과물에 대한 법적 책임은 전적으로 사용자에게 있습니다.</li>
+      <li><b>있는 그대로(as-is) 제공하며 지원하지 않습니다.</b>
+          수정·재가공·문제 해결은 각자의 몫입니다. (MIT 라이선스)</li>
+    </ul>
+    <button id="agree">동의하고 시작</button>
+  </div>
 </div>
 
 <div id="modal">
@@ -503,6 +534,15 @@ async function refresh() {
     lastData = s; // render 성공 후에만 — 렌더 예외로 화면이 굳지 않게
   } catch {}
 }
+
+/* 첫 방문 시 사용 전 안내 — 동의하면 이 브라우저에 기억 */
+try {
+  if (!localStorage.getItem("shorts-marker-agreed")) $("#gate").classList.add("show");
+} catch { $("#gate").classList.add("show"); }
+$("#agree").addEventListener("click", () => {
+  try { localStorage.setItem("shorts-marker-agreed", "1"); } catch {}
+  $("#gate").classList.remove("show");
+});
 
 refresh();
 setInterval(refresh, 3000);
