@@ -135,6 +135,10 @@
           margin-top: 28px; color: #8a919e; font-size: 12px; }
   .foot a { display: flex; align-items: center; opacity: .85; }
   .foot a:hover { opacity: 1; }
+  .cstat { padding-left: 10px; border-left: 1px solid #2a2e36; }
+  .cstat.ok { color: #7ad97b; }
+  .cstat.bad { color: #ff8f9a; }
+  .foot-note { text-align: center; margin-top: 8px; color: #5c6370; font-size: 11px; }
   @media (max-width: 720px) { /* 앱 내장 브라우저 좁은 패널 대응 */
     .ed-box { flex-direction: column; overflow-y: auto; }
     .ed-right { width: auto; max-width: none; }
@@ -175,7 +179,10 @@
         <path d="M11.5 5.5v9l8-4.5z" fill="#fff"/>
       </svg>
     </a>
+    <span id="claudeStatus" class="cstat"></span>
   </footer>
+  <div class="foot-note">이상이 있으면 화면 상단에 경고가 표시됩니다:
+    ① Claude Code CLI 미설치 &nbsp;② 로그인 필요(구독 없음 포함) &nbsp;③ API 키 설정(크레딧 과금 위험)</div>
 </div>
 
 <div id="gate">
@@ -565,6 +572,10 @@ async function checkHealth() {
       msgs.push(["warn", "이 서버에 ANTHROPIC_API_KEY가 설정되어 있습니다 — 구독 대신 크레딧으로 과금될 수 있습니다. 해제를 권장합니다."]);
     }
     $("#health").innerHTML = msgs.map(([c, m]) => `<div class="banner ${c}">${m}</div>`).join("");
+    const st = $("#claudeStatus");
+    if (h.login === "ok") { st.className = "cstat ok"; st.textContent = "Claude 연결됨 ✓"; }
+    else if (h.login === "checking") { st.className = "cstat"; st.textContent = "Claude 연결 확인 중..."; }
+    else { st.className = "cstat bad"; st.textContent = "Claude 연결 안 됨 ✗"; }
     if (h.login === "checking") setTimeout(checkHealth, 5000); // 시작 직후 점검 끝날 때까지 재확인
   } catch {}
 }
