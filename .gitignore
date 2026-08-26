@@ -1,6 +1,7 @@
 .venv/
 output/
 temp/
+bgm/
 __pycache__/
 .claude/
 .DS_Store

@@ -14,6 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 W, H = 1080, 1920
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 MAX_TEXT_W = W - 120
+BGM_DIR = Path(__file__).resolve().parent / "bgm"
+BGM_FADE_SEC = 1.5
 
 # 편집기와 서버가 공유하는 기본 스타일. y는 1080x1920 캔버스 기준 텍스트 상단 좌표.
 # cta는 마지막 last_sec초 동안만 표시되는 텍스트(루프 안 깨는 CTA용).
@@ -24,6 +26,7 @@ DEFAULT_STYLE = {
              "color": "#FFFFFF", "outline": "#000000"},
     "cta": {"enabled": False, "text": "풀영상은 채널에서", "y": 1600, "size": 48,
             "color": "#7AD97B", "outline": "#000000", "last_sec": 3},
+    "bgm": {"file": "", "volume": 0.15},  # bgm/ 폴더의 파일명, 원음 대비 볼륨
 }
 
 VF_VERTICAL = (
@@ -139,19 +142,39 @@ def _make_short_inner(source, start, duration, out_path, segments, st, workdir) 
                              max(seg["start"], start) - start,
                              min(seg["end"], end) - start))
 
+    # 배경음악 — bgm/ 폴더 안의 파일만 허용 (스타일은 클라이언트 입력이라 경로 검증)
+    bgm = st.get("bgm") or {}
+    bgm_path = None
+    if bgm.get("file"):
+        candidate = BGM_DIR / Path(bgm["file"]).name
+        if candidate.is_file():
+            bgm_path = candidate
+
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", str(start), "-t", str(duration), "-i", str(source.resolve())]
     for png, _, _, _ in overlays:
         cmd += ["-loop", "1", "-i", str(png)]
+    if bgm_path:
+        cmd += ["-stream_loop", "-1", "-i", str(bgm_path)]  # 짧으면 반복
 
     graph = [f"[0:v]{VF_VERTICAL}[v0]"]
     for i, (_, y, s, e) in enumerate(overlays):
         graph.append(
             f"[v{i}][{i + 1}:v]overlay=(W-w)/2:{y}"
             f":enable='between(t,{s:.2f},{e:.2f})'[v{i + 1}]")
+    audio_map = "0:a?"
+    if bgm_path:
+        vol = max(0.0, min(1.0, float(bgm.get("volume", 0.15))))
+        fade_start = max(0.0, duration - BGM_FADE_SEC)
+        ai = len(overlays) + 1
+        graph.append(
+            f"[{ai}:a]volume={vol},afade=t=out:st={fade_start:.2f}:d={BGM_FADE_SEC}[bgm]")
+        # duration=first: 목소리(원본) 길이 기준으로 끝냄, normalize=0: 원음 볼륨 유지
+        graph.append("[0:a][bgm]amix=inputs=2:duration=first:normalize=0[aout]")
+        audio_map = "[aout]"
     cmd += [
         "-filter_complex", ";".join(graph),
-        "-map", f"[v{len(overlays)}]", "-map", "0:a?",
+        "-map", f"[v{len(overlays)}]", "-map", audio_map,
         "-t", str(duration),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",

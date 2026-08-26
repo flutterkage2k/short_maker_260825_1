@@ -173,6 +173,17 @@ def health():
     return CLAUDE_STATUS
 
 
+BGM_EXTS = {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"}
+
+
+@app.get("/api/bgm")
+def list_bgm():
+    """bgm/ 폴더의 음악 파일 목록."""
+    cutter.BGM_DIR.mkdir(exist_ok=True)
+    return {"files": sorted(f.name for f in cutter.BGM_DIR.iterdir()
+                            if f.suffix.lower() in BGM_EXTS)}
+
+
 cleanup_interrupted()
 threading.Thread(target=worker, daemon=True).start()
 threading.Thread(target=check_claude, daemon=True).start()

@@ -121,6 +121,9 @@
   .ctl input[type=range] { flex: 1; }
   .ctl input[type=color] { width: 34px; height: 26px; border: 0; background: none;
                            padding: 0; cursor: pointer; }
+  .ctl select { flex: 1; min-width: 0; background: #1d2026; color: #e8eaed;
+                border: 1px solid #2a2e36; border-radius: 8px; padding: 8px 10px;
+                font-size: 13px; }
   .ctl .lab { font-size: 12px; color: #8a919e; white-space: nowrap; }
   #segList { display: flex; flex-direction: column; gap: 6px; max-height: 200px;
              overflow-y: auto; }
@@ -257,6 +260,21 @@
           <input type="number" id="cLast" min="1" max="10" style="width:52px;background:#14161a;
             color:#e8eaed;border:1px solid #2a2e36;border-radius:6px;padding:6px">
           <span class="lab">초</span>
+        </div>
+      </div>
+      <div class="ctl" id="ctlBgm">
+        <div class="row">
+          <span class="lab">배경음악</span>
+          <select id="bgmSel"><option value="">없음</option></select>
+        </div>
+        <div class="row">
+          <span class="lab">볼륨</span><input type="range" id="bgmVol" min="5" max="60">
+          <span class="lab" id="bgmVolLab"></span>
+        </div>
+        <div class="muted" style="margin-top:8px; line-height:1.5">
+          사용법: 프로젝트의 <b>bgm 폴더</b>에 음악 파일(mp3, m4a 등)을 넣으면 목록에
+          나타납니다. 음악은 숏츠 길이에 맞게 잘리거나 반복되고, 끝에서 서서히
+          작아집니다. 미리보기에서는 음악이 들리지 않고 <b>생성된 영상에만</b> 들어갑니다.
         </div>
       </div>
       <div class="ctl">
@@ -639,6 +657,17 @@ async function openEditor(encName, index) {
   $("#cOutline").value = ed.style.cta.outline;
   $("#cLast").value = ed.style.cta.last_sec;
 
+  ed.style.bgm = ed.style.bgm || { file: "", volume: 0.15 };
+  try { // bgm 폴더 목록 채우기
+    const bg = await (await fetch("/api/bgm")).json();
+    $("#bgmSel").innerHTML = '<option value="">없음</option>'
+      + bg.files.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+  } catch {}
+  $("#bgmSel").value = ed.style.bgm.file || "";
+  if ($("#bgmSel").value !== (ed.style.bgm.file || "")) $("#bgmSel").value = ""; // 파일 삭제된 경우
+  $("#bgmVol").value = Math.round((ed.style.bgm.volume || 0.15) * 100);
+  $("#bgmVolLab").textContent = $("#bgmVol").value + "%";
+
   $("#edSeek").min = ed.clip.start_sec;
   $("#edSeek").max = ed.clip.end_sec;
   $("#edSeek").value = ed.clip.start_sec;
@@ -689,10 +718,13 @@ function readControls() {
     size: Number($("#cSize").value), color: $("#cColor").value,
     outline: $("#cOutline").value, last_sec: Number($("#cLast").value) || 3,
   });
+  ed.style.bgm = { file: $("#bgmSel").value,
+                   volume: Number($("#bgmVol").value) / 100 };
+  $("#bgmVolLab").textContent = $("#bgmVol").value + "%";
   applyStyleToUI();
 }
 ["tOn", "tText", "tSize", "tColor", "tOutline", "sOn", "sSize", "sColor", "sOutline",
- "cOn", "cText", "cSize", "cColor", "cOutline", "cLast"]
+ "cOn", "cText", "cSize", "cColor", "cOutline", "cLast", "bgmSel", "bgmVol"]
   .forEach((id) => $("#" + id).addEventListener("input", readControls));
 
 function styleOverlay(el, conf) {
