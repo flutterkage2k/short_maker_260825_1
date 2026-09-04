@@ -89,7 +89,8 @@ def run_job(job: dict):
             active_jobs[jid]["label"] = media_path.stem
         # 원본 위치 기록 — 자르기 단계에서 사용
         (outdir / "source.json").write_text(
-            json.dumps({"media": str(media_path.resolve()), "input": source},
+            json.dumps({"media": str(media_path.resolve()), "input": source,
+                        "duration": round(cutter.media_duration(media_path), 2)},
                        ensure_ascii=False), encoding="utf-8")
 
         set_state("transcribing", outdir)
@@ -99,7 +100,8 @@ def run_job(job: dict):
         (outdir / "transcript.txt").write_text(transcript_to_text(transcript), encoding="utf-8")
 
         set_state("selecting", outdir)
-        clips = select_segments(transcript_to_text(transcript))
+        clips = select_segments(transcript_to_text(transcript),
+                                max_sec=cutter.media_duration(media_path))
         (outdir / "shorts.json").write_text(
             json.dumps({"source": source, "clips": clips}, ensure_ascii=False, indent=2),
             encoding="utf-8")
@@ -174,6 +176,7 @@ def health():
 
 
 BGM_EXTS = {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"}
+BANNER_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 
 @app.get("/api/bgm")
@@ -182,6 +185,14 @@ def list_bgm():
     cutter.BGM_DIR.mkdir(exist_ok=True)
     return {"files": sorted(f.name for f in cutter.BGM_DIR.iterdir()
                             if f.suffix.lower() in BGM_EXTS)}
+
+
+@app.get("/api/banner")
+def list_banner():
+    """banner/ 폴더의 이미지 목록."""
+    cutter.BANNER_DIR.mkdir(exist_ok=True)
+    return {"files": sorted(f.name for f in cutter.BANNER_DIR.iterdir()
+                            if f.suffix.lower() in BANNER_EXTS)}
 
 
 cleanup_interrupted()
@@ -219,6 +230,7 @@ def list_jobs():
             entry = {"name": d.name, "state": status["state"],
                      "state_label": STATE_LABELS.get(status["state"]), "error": status.get("error"),
                      "elapsed": status.get("elapsed"),
+                     "duration": source_duration(d),  # 영상 길이 밖 구간 표시용
                      "clips": [], "cuts": {}, "metas": {}}
             if (d / "shorts.json").exists():
                 entry["clips"] = json.loads((d / "shorts.json").read_text(encoding="utf-8"))["clips"]
@@ -273,6 +285,21 @@ def get_source_media(d: Path) -> Path:
     return Path(info["media"])
 
 
+def source_duration(d: Path) -> float:
+    """원본 영상 길이(초). source.json에 캐시 — 매 폴링마다 ffprobe 하지 않게."""
+    path = d / "source.json"
+    if not path.exists():
+        return 0.0
+    info = json.loads(path.read_text(encoding="utf-8"))
+    if not info.get("duration"):
+        media = Path(info.get("media", ""))
+        if not media.exists():
+            return 0.0
+        info["duration"] = round(cutter.media_duration(media), 2)
+        path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    return float(info.get("duration") or 0)
+
+
 def load_clip(d: Path, index: int) -> dict:
     shorts = json.loads((d / "shorts.json").read_text(encoding="utf-8"))
     if not 0 <= index < len(shorts["clips"]):
@@ -298,6 +325,11 @@ def cut_clip(name: str, req: CutRequest):
     clip = load_clip(d, req.index)
     if not float(clip["end_sec"]) > float(clip["start_sec"]):
         raise HTTPException(400, "구간 시각이 잘못됨 (끝이 시작보다 앞)")
+    dur = source_duration(d)
+    if dur and float(clip["start_sec"]) >= dur:
+        raise HTTPException(
+            400, f"이 구간은 영상 길이({int(dur // 60):02d}:{int(dur % 60):02d}) 밖입니다 "
+                 "— AI가 없는 시각을 만들어낸 구간이라 생성할 수 없습니다")
     media = get_source_media(d)
 
     transcript = json.loads((d / "transcript.json").read_text(encoding="utf-8"))
@@ -376,9 +408,11 @@ def editor_data(name: str, index: int):
             shutil.copy2(media, link)
 
     segments = json.loads((d / "transcript.json").read_text(encoding="utf-8"))["segments"]
+    # 실제로 구워지는 자막만 목록에 — 음악·박수 라벨은 렌더러에서 빠지므로 여기서도 제외
+    usable = {id(x) for x in cutter.clean_segments(segments)}
     segs = [{"i": i, "start": s["start"], "end": s["end"], "text": s["text"]}
             for i, s in enumerate(segments)
-            if s["end"] > clip["start_sec"] and s["start"] < clip["end_sec"]]
+            if id(s) in usable and s["end"] > clip["start_sec"] and s["start"] < clip["end_sec"]]
 
     style_path = d / "clips" / f"style_{index + 1}.json"
     if style_path.exists():
@@ -389,7 +423,7 @@ def editor_data(name: str, index: int):
         style["title"]["enabled"] = True
         style["title"]["text"] = clip.get("title", "")
     return {"clip": clip, "media_url": f"/output/{name}/{link.name}",
-            "segments": segs, "style": style}
+            "segments": segs, "style": style, "duration": source_duration(d)}
 
 
 @app.get("/")
@@ -398,4 +432,6 @@ def index():
 
 
 OUTPUT_DIR.mkdir(exist_ok=True)
+cutter.BANNER_DIR.mkdir(exist_ok=True)
+app.mount("/banner", StaticFiles(directory=cutter.BANNER_DIR), name="banner")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR, follow_symlink=True), name="output")

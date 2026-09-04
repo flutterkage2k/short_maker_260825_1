@@ -132,6 +132,14 @@
                cursor: pointer; }
   .segrow .t:hover { text-decoration: underline; }
   .segrow input { flex: 1; min-width: 0; padding: 6px 8px; font-size: 13px; }
+  .segrow.extra input[type=text] { border-color: #3d5a3a; }
+  .segrow .dur { flex: 0 0 46px; min-width: 46px; }
+  .segrow .x { background: #3a2226; color: #ff8f9a; padding: 4px 8px; font-size: 12px;
+               flex: 0 0 auto; }
+  .ctl input.num { flex: 0 0 56px; width: 56px; min-width: 0; background: #1d2026;
+                   color: #e8eaed; border: 1px solid #2a2e36; border-radius: 6px;
+                   padding: 6px 8px; font-size: 13px; }
+  .ovimg { padding: 0; width: auto; display: none; }
   .ed-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .vlabel { font-size: 12px; color: #8a919e; margin-top: 10px; }
   .foot { display: flex; gap: 10px; align-items: center; justify-content: center;
@@ -211,7 +219,9 @@
     <div class="ed-left">
       <div id="canvas">
         <video id="edv" playsinline></video>
+        <img class="ov ovimg" id="ovBanner" alt="">
         <div class="ov" id="ovTitle"></div>
+        <div class="ov" id="ovTitle2"></div>
         <div class="ov" id="ovSub"></div>
         <div class="ov" id="ovCta"></div>
       </div>
@@ -235,6 +245,47 @@
           <span class="lab">크기</span><input type="range" id="tSize" min="40" max="130">
           <span class="lab">글자</span><input type="color" id="tColor">
           <span class="lab">테두리</span><input type="color" id="tOutline">
+        </div>
+        <div class="row">
+          <span class="lab">표시</span><input type="number" class="num" id="tStart" min="0" step="1">
+          <span class="lab">초부터</span><input type="number" class="num" id="tDur" min="0" step="1">
+          <span class="lab">초간 (0 = 끝까지)</span>
+        </div>
+      </div>
+      <div class="ctl" id="ctlTitle2">
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="t2On"> 상단 타이틀 2 (이어받는 문구)</label>
+        </div>
+        <div class="row"><input type="text" id="t2Text" placeholder="두 번째 문구 입력"></div>
+        <div class="row">
+          <span class="lab">크기</span><input type="range" id="t2Size" min="40" max="130">
+          <span class="lab">글자</span><input type="color" id="t2Color">
+          <span class="lab">테두리</span><input type="color" id="t2Outline">
+        </div>
+        <div class="row">
+          <span class="lab">표시</span><input type="number" class="num" id="t2Start" min="0" step="1">
+          <span class="lab">초부터</span><input type="number" class="num" id="t2Dur" min="0" step="1">
+          <span class="lab">초간 (0 = 끝까지)</span>
+        </div>
+      </div>
+      <div class="ctl" id="ctlBanner">
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="bnOn"> 배너 이미지</label>
+          <select id="bnSel"><option value="">없음</option></select>
+        </div>
+        <div class="row">
+          <span class="lab">폭</span><input type="range" id="bnWidth" min="150" max="1080">
+          <span class="lab" id="bnWidthLab"></span>
+        </div>
+        <div class="row">
+          <span class="lab">표시</span><input type="number" class="num" id="bnStart" min="0" step="1">
+          <span class="lab">초부터</span><input type="number" class="num" id="bnDur" min="0" step="1">
+          <span class="lab">초간 (0 = 끝까지)</span>
+        </div>
+        <div class="muted" style="margin-top:8px; line-height:1.5">
+          사용법: 프로젝트의 <b>banner 폴더</b>에 이미지(png, jpg 등)를 넣으면 목록에
+          나타납니다. 미리보기에서 <b>드래그로 위치</b>를 잡고 폭을 조절하세요.
+          투명 배경 png를 쓰면 영상 위에 자연스럽게 얹힙니다.
         </div>
       </div>
       <div class="ctl" id="ctlSub">
@@ -278,8 +329,17 @@
         </div>
       </div>
       <div class="ctl">
-        <h4>자막 내용 수정 (오인식 교정 — 전체 전사본에 반영)</h4>
+        <h4>자막 내용 수정 · 추가</h4>
+        <div class="row" style="margin-bottom:8px">
+          <button class="ghost" id="segAdd">+ 현재 시점에 자막 추가</button>
+          <span class="lab" id="segAddAt"></span>
+        </div>
         <div id="segList"></div>
+        <div class="muted" style="margin-top:8px; line-height:1.5">
+          시각을 누르면 그 시점으로 이동합니다. 원본 자막을 고치면 전체 전사본에
+          반영되고, <b>추가한 자막</b>(번역 등)은 이 구간에만 저장됩니다.
+          추가 자막이 있는 시간대에는 원본 자막 대신 추가 자막이 나옵니다.
+        </div>
       </div>
       <div class="ed-actions">
         <button class="ghost" id="edClose">닫기</button>
@@ -379,17 +439,21 @@ function clipHtml(job, c, i) {
   const jn = jsName(job.name);
   const cutting2 = pending.has(`cut:${jn}:${i}`);
   const metaing = pending.has(`meta:${jn}:${i}`);
+  // AI가 영상 길이 밖 시각을 만들어내는 경우가 있어 미리 걸러 표시
+  const bad = job.duration && c.start_sec >= job.duration;
+  const off = bad ? "disabled" : "";
   return `<div class="clip">
     <div class="clip-top">
       <h3>${i + 1}. ${esc(c.title)}</h3>
       <span class="time">${fmt(c.start_sec)} ~ ${fmt(c.end_sec)} · ${dur}초 · 훅 ${esc(String(c.hook ?? "?"))}/10</span>
     </div>
     <p>${esc(c.reason)}</p>
+    ${bad ? `<div class="err">이 구간은 영상 길이(${fmt(job.duration)}) 밖입니다 — AI가 없는 시각을 만들어낸 구간이라 사용할 수 없습니다. 다시 분석하면 걸러집니다.</div>` : ""}
     <div class="actions">
       <label class="chk"><input type="checkbox" checked data-subs> 자막 넣기</label>
-      <button class="ghost" onclick="cut('${jn}', ${i}, this)" ${cutting2 ? "disabled" : ""}>${cutting2 ? "생성 중..." : "숏츠 생성"}</button>
-      <button onclick="openEditor('${jn}', ${i})">자막 편집</button>
-      <button class="ghost" onclick="makeMeta('${jn}', ${i}, this)" ${metaing ? "disabled" : ""}>${metaing ? "생성 중... (수십 초)" : meta ? "업로드 정보 다시 생성" : "업로드 정보 생성"}</button>
+      <button class="ghost" onclick="cut('${jn}', ${i}, this)" ${cutting2 || bad ? "disabled" : ""}>${cutting2 ? "생성 중..." : "숏츠 생성"}</button>
+      <button onclick="openEditor('${jn}', ${i})" ${off}>자막 편집</button>
+      <button class="ghost" onclick="makeMeta('${jn}', ${i}, this)" ${metaing || bad ? "disabled" : ""}>${metaing ? "생성 중... (수십 초)" : meta ? "업로드 정보 다시 생성" : "업로드 정보 생성"}</button>
     </div>
     ${metaHtml(meta)}
     ${cuts.map((u) => `<div class="vlabel">${cutLabel(u)}</div>
@@ -650,6 +714,28 @@ async function openEditor(encName, index) {
   $("#sSize").value = ed.style.subs.size;
   $("#sColor").value = ed.style.subs.color;
   $("#sOutline").value = ed.style.subs.outline;
+  $("#t2On").checked = ed.style.title2.enabled;
+  $("#t2Text").value = ed.style.title2.text || "";
+  $("#t2Size").value = ed.style.title2.size;
+  $("#t2Color").value = ed.style.title2.color;
+  $("#t2Outline").value = ed.style.title2.outline;
+  $("#tStart").value = ed.style.title.start || 0;
+  $("#tDur").value = ed.style.title.dur || 0;
+  $("#t2Start").value = ed.style.title2.start || 0;
+  $("#t2Dur").value = ed.style.title2.dur || 0;
+  $("#bnOn").checked = ed.style.banner.enabled;
+  $("#bnWidth").value = ed.style.banner.width || 700;
+  $("#bnWidthLab").textContent = $("#bnWidth").value + "px";
+  $("#bnStart").value = ed.style.banner.start || 0;
+  $("#bnDur").value = ed.style.banner.dur || 0;
+  try { // banner 폴더 목록 채우기
+    const bn = await (await fetch("/api/banner")).json();
+    $("#bnSel").innerHTML = '<option value="">없음</option>'
+      + bn.files.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+  } catch {}
+  $("#bnSel").value = ed.style.banner.file || "";
+  if ($("#bnSel").value !== (ed.style.banner.file || "")) $("#bnSel").value = "";
+
   $("#cOn").checked = ed.style.cta.enabled;
   $("#cText").value = ed.style.cta.text || "";
   $("#cSize").value = ed.style.cta.size;
@@ -672,24 +758,7 @@ async function openEditor(encName, index) {
   $("#edSeek").max = ed.clip.end_sec;
   $("#edSeek").value = ed.clip.start_sec;
 
-  $("#segList").innerHTML = ed.segments.map((s) =>
-    `<div class="segrow"><span class="t" data-jump="${s.start}" title="이 시점으로 이동">${fmt(s.start)}</span>
-     <input type="text" data-seg="${s.i}" value="${esc(s.text)}"></div>`).join("");
-  $("#segList").querySelectorAll(".t").forEach((el) => {
-    el.addEventListener("click", () => {
-      edv.currentTime = Number(el.dataset.jump);
-      updateOverlays();
-    });
-  });
-  $("#segList").querySelectorAll("input").forEach((inp) => {
-    inp.addEventListener("input", () => {
-      const i = Number(inp.dataset.seg);
-      ed.edits.set(i, inp.value);
-      const seg = ed.segments.find((s) => s.i === i);
-      if (seg) seg.text = inp.value;
-      updateOverlays();
-    });
-  });
+  renderSegList();
 
   $("#edErr").textContent = "";
   $("#edMake").disabled = false; $("#edMake").textContent = "숏츠 생성";
@@ -702,6 +771,73 @@ function positionVideo() {
   edv.style.height = `${Math.min(h, 480)}px`;
   edv.style.top = `${(480 - Math.min(h, 480)) / 2}px`;
 }
+
+/* 자막 목록 — 원본 전사 + 사용자가 추가한 자막을 시간순으로 */
+function relTime(abs) { return fmt(Math.max(0, abs - ed.clip.start_sec)); }
+
+function renderSegList() {
+  const rows = [
+    ...ed.segments.map((s) => ({ kind: "seg", start: s.start, seg: s })),
+    ...ed.style.extra_subs.map((x, k) => ({ kind: "extra", start: Number(x.start), x, k })),
+  ].sort((a, b) => a.start - b.start);
+
+  $("#segList").innerHTML = rows.map((r) => r.kind === "seg"
+    ? `<div class="segrow"><span class="t" data-jump="${r.start}" title="이 시점으로 이동">${relTime(r.start)}</span>
+       <input type="text" data-seg="${r.seg.i}" value="${esc(r.seg.text)}"></div>`
+    : `<div class="segrow extra"><span class="t" data-jump="${r.start}" title="이 시점으로 이동">${relTime(r.start)}</span>
+       <input type="text" data-extra="${r.k}" value="${esc(r.x.text)}" placeholder="추가 자막(번역 등)">
+       <input type="number" class="dur" data-extradur="${r.k}" min="1" max="30" step="1"
+              value="${Math.round(Number(r.x.end) - Number(r.x.start))}" title="표시 시간(초)">
+       <button class="x" data-del="${r.k}" title="삭제">×</button></div>`).join("");
+
+  $("#segList").querySelectorAll(".t").forEach((el) => {
+    el.addEventListener("click", () => {
+      edv.currentTime = Number(el.dataset.jump);
+      updateOverlays();
+    });
+  });
+  $("#segList").querySelectorAll("[data-seg]").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const i = Number(inp.dataset.seg);
+      ed.edits.set(i, inp.value);
+      const seg = ed.segments.find((s) => s.i === i);
+      if (seg) seg.text = inp.value;
+      updateOverlays();
+    });
+  });
+  $("#segList").querySelectorAll("[data-extra]").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      ed.style.extra_subs[Number(inp.dataset.extra)].text = inp.value;
+      updateOverlays();
+    });
+  });
+  $("#segList").querySelectorAll("[data-extradur]").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const x = ed.style.extra_subs[Number(inp.dataset.extradur)];
+      x.end = Number(x.start) + Math.max(1, Number(inp.value) || 3);
+      updateOverlays();
+    });
+  });
+  $("#segList").querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      ed.style.extra_subs.splice(Number(btn.dataset.del), 1);
+      renderSegList();
+      updateOverlays();
+    });
+  });
+}
+
+$("#segAdd").addEventListener("click", () => {
+  if (!ed) return;
+  const start = Math.min(edv.currentTime || ed.clip.start_sec, ed.clip.end_sec - 1);
+  ed.style.extra_subs.push({ start: Math.round(start * 10) / 10,
+                             end: Math.min(ed.clip.end_sec, start + 3), text: "" });
+  renderSegList();
+  updateOverlays();
+  const added = [...$("#segList").querySelectorAll("[data-extra]")]
+    .find((i) => !i.value);
+  if (added) { added.scrollIntoView({ block: "nearest" }); added.focus(); }
+});
 
 function readControls() {
   Object.assign(ed.style.title, {
@@ -718,12 +854,30 @@ function readControls() {
     size: Number($("#cSize").value), color: $("#cColor").value,
     outline: $("#cOutline").value, last_sec: Number($("#cLast").value) || 3,
   });
+  Object.assign(ed.style.title, {
+    start: Number($("#tStart").value) || 0, dur: Number($("#tDur").value) || 0,
+  });
+  Object.assign(ed.style.title2, {
+    enabled: $("#t2On").checked, text: $("#t2Text").value,
+    size: Number($("#t2Size").value), color: $("#t2Color").value,
+    outline: $("#t2Outline").value,
+    start: Number($("#t2Start").value) || 0, dur: Number($("#t2Dur").value) || 0,
+  });
+  Object.assign(ed.style.banner, {
+    enabled: $("#bnOn").checked, file: $("#bnSel").value,
+    width: Number($("#bnWidth").value) || 700,
+    start: Number($("#bnStart").value) || 0, dur: Number($("#bnDur").value) || 0,
+  });
+  $("#bnWidthLab").textContent = $("#bnWidth").value + "px";
   ed.style.bgm = { file: $("#bgmSel").value,
                    volume: Number($("#bgmVol").value) / 100 };
   $("#bgmVolLab").textContent = $("#bgmVol").value + "%";
   applyStyleToUI();
 }
-["tOn", "tText", "tSize", "tColor", "tOutline", "sOn", "sSize", "sColor", "sOutline",
+["tOn", "tText", "tSize", "tColor", "tOutline", "tStart", "tDur",
+ "t2On", "t2Text", "t2Size", "t2Color", "t2Outline", "t2Start", "t2Dur",
+ "bnOn", "bnSel", "bnWidth", "bnStart", "bnDur",
+ "sOn", "sSize", "sColor", "sOutline",
  "cOn", "cText", "cSize", "cColor", "cOutline", "cLast", "bgmSel", "bgmVol"]
   .forEach((id) => $("#" + id).addEventListener("input", readControls));
 
@@ -739,23 +893,50 @@ function styleOverlay(el, conf) {
 
 function applyStyleToUI() {
   styleOverlay($("#ovTitle"), ed.style.title);
+  styleOverlay($("#ovTitle2"), ed.style.title2);
   styleOverlay($("#ovSub"), ed.style.subs);
   styleOverlay($("#ovCta"), ed.style.cta);
+  const bn = $("#ovBanner");
+  bn.style.top = `${ed.style.banner.y * SCALE}px`;
+  bn.style.width = `${ed.style.banner.width * SCALE}px`;
+  bn.style.left = `${(1080 - ed.style.banner.width) / 2 * SCALE}px`;
+  const src = ed.style.banner.file ? `/banner/${encodeURIComponent(ed.style.banner.file)}` : "";
+  if (bn.getAttribute("src") !== src) bn.src = src;
   updateOverlays();
+}
+
+/* 클립 기준 표시 구간 안인지 (일시정지 중엔 항상 보이게 — 위치 잡기 편하도록) */
+function inWindow(conf, t) {
+  if (edv.paused) return true;
+  const rel = t - ed.clip.start_sec;
+  const clipDur = ed.clip.end_sec - ed.clip.start_sec;
+  const s = Number(conf.start) || 0;
+  const e = Number(conf.dur) > 0 ? Math.min(clipDur, s + Number(conf.dur)) : clipDur;
+  return rel >= s && rel <= e;
 }
 
 function updateOverlays() {
   if (!ed) return;
-  $("#ovTitle").textContent = ed.style.title.text || "";
   const t = edv.currentTime;
+  $("#ovTitle").textContent =
+    inWindow(ed.style.title, t) ? (ed.style.title.text || "") : "";
+  $("#ovTitle2").textContent =
+    inWindow(ed.style.title2, t) ? (ed.style.title2.text || "") : "";
+  $("#ovBanner").style.display =
+    ed.style.banner.enabled && ed.style.banner.file && inWindow(ed.style.banner, t)
+      ? "block" : "none";
+  // 추가 자막이 덮는 시간대는 원본 자막 대신 추가 자막 (렌더러와 같은 규칙)
+  const extra = ed.style.extra_subs.find(
+    (x) => t >= Number(x.start) && t < Number(x.end) && (x.text || "").trim());
   const seg = ed.segments.find((s) => t >= s.start && t < s.end);
-  $("#ovSub").textContent = seg ? seg.text : "";
+  $("#ovSub").textContent = extra ? extra.text : (seg ? seg.text : "");
   // 일시정지 중엔 항상 표시(드래그로 위치 잡기 편하게), 재생 중엔 실제 타이밍대로
   const showCta = ed.style.cta.enabled &&
     (edv.paused || t >= ed.clip.end_sec - (ed.style.cta.last_sec || 3));
   $("#ovCta").textContent = showCta ? ed.style.cta.text : "";
   $("#edTime").textContent =
     `${fmt(Math.max(0, t - ed.clip.start_sec))} / ${fmt(ed.clip.end_sec - ed.clip.start_sec)}`;
+  $("#segAddAt").textContent = `현재 ${fmt(Math.max(0, t - ed.clip.start_sec))} 지점`;
 }
 
 edv.addEventListener("timeupdate", () => {
@@ -819,6 +1000,8 @@ function makeDraggable(el, conf) {
 makeDraggable($("#ovTitle"), () => ed.style.title);
 makeDraggable($("#ovSub"), () => ed.style.subs);
 makeDraggable($("#ovCta"), () => ed.style.cta);
+makeDraggable($("#ovTitle2"), () => ed.style.title2);
+makeDraggable($("#ovBanner"), () => ed.style.banner);
 
 $("#edClose").addEventListener("click", () => {
   edv.pause(); $("#edPlay").textContent = "재생";

@@ -135,8 +135,11 @@ def ask_claude_json(prompt: str, pattern: str, retries: int = 1) -> object:
 
 
 # ponytail: 전사본 전체를 한 번에 전달. 2~3시간급 초장편에서 잘리면 청크 분할 추가.
-def select_segments(transcript_text: str) -> list[dict]:
-    """전사본에서 숏츠 후보 구간 선정. 시각값 검증까지."""
+def select_segments(transcript_text: str, max_sec: float = 0) -> list[dict]:
+    """전사본에서 숏츠 후보 구간 선정. 시각값 검증까지.
+
+    max_sec: 영상 길이. 주면 그 밖의 구간은 버린다(AI가 없는 시각을 만들어내는 일이 있음).
+    """
     raw = ask_claude_json(SELECT_PROMPT + transcript_text, r"\[.*\]")
     clips = []
     for c in raw:
@@ -145,8 +148,15 @@ def select_segments(transcript_text: str) -> list[dict]:
             c["end_sec"] = float(c["end_sec"])
         except (KeyError, TypeError, ValueError):
             continue
-        if c["end_sec"] > c["start_sec"]:
-            clips.append(c)
+        if c["end_sec"] <= c["start_sec"]:
+            continue
+        if max_sec:
+            if c["start_sec"] >= max_sec:
+                continue  # 영상 밖 — 통째로 버림
+            c["end_sec"] = min(c["end_sec"], max_sec)
+            if c["end_sec"] - c["start_sec"] < 5:
+                continue
+        clips.append(c)
     clips.sort(key=lambda c: c["start_sec"])
     return clips
 

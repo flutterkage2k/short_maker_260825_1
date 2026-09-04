@@ -1,8 +1,8 @@
-"""숏츠 mp4 생성: 구간 자르기 + 세로 1080x1920(위아래 검정) + 텍스트 굽기.
+"""숏츠 mp4 생성: 구간 자르기 + 세로 1080x1920(위아래 검정) + 텍스트·배너 굽기.
 
 홈브루 ffmpeg에 libass/drawtext가 없어서, 자막·타이틀은 Pillow로 PNG를 그려
 ffmpeg overlay 필터로 시간 맞춰 얹는 방식을 쓴다.
-웹 편집기(WYSIWYG)가 좌표·크기·색을 style로 넘기면 그대로 렌더링한다.
+웹 편집기(WYSIWYG)가 좌표·크기·색·표시 구간을 style로 넘기면 그대로 렌더링한다.
 """
 
 import shutil
@@ -14,19 +14,34 @@ from PIL import Image, ImageDraw, ImageFont
 W, H = 1080, 1920
 FONT_PATH = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 MAX_TEXT_W = W - 120
-BGM_DIR = Path(__file__).resolve().parent / "bgm"
+BASE_DIR = Path(__file__).resolve().parent
+BGM_DIR = BASE_DIR / "bgm"
+BANNER_DIR = BASE_DIR / "banner"
 BGM_FADE_SEC = 1.5
 
-# 편집기와 서버가 공유하는 기본 스타일. y는 1080x1920 캔버스 기준 텍스트 상단 좌표.
-# cta는 마지막 last_sec초 동안만 표시되는 텍스트(루프 안 깨는 CTA용).
+# Whisper가 음악·박수 구간에서 뱉는 라벨 — 자막으로 구우면 화면에 "音楽"만 뜬다
+NOISE_LABELS = {
+    "音楽", "[音楽]", "(音楽)", "♪", "♪♪", "拍手", "[拍手]", "(拍手)", "笑",
+    "[音楽]♪", "Music", "[Music]", "(Music)", "Applause", "[Applause]",
+    "음악", "[음악]", "박수", "[박수]",
+}
+
+# 편집기와 서버가 공유하는 기본 스타일. y는 1080x1920 캔버스 기준 요소 상단 좌표.
+# start/dur은 클립 기준 초. dur 0이면 클립 끝까지.
 DEFAULT_STYLE = {
     "title": {"enabled": False, "text": "", "y": 170, "size": 76,
-              "color": "#FFD400", "outline": "#000000"},
+              "color": "#FFD400", "outline": "#000000", "start": 0, "dur": 0},
+    "title2": {"enabled": False, "text": "", "y": 300, "size": 64,
+               "color": "#FFFFFF", "outline": "#000000", "start": 0, "dur": 0},
+    "banner": {"enabled": False, "file": "", "y": 420, "width": 700,
+               "start": 0, "dur": 0},
     "subs": {"enabled": True, "y": 1330, "size": 58,
              "color": "#FFFFFF", "outline": "#000000"},
     "cta": {"enabled": False, "text": "풀영상은 채널에서", "y": 1600, "size": 48,
             "color": "#7AD97B", "outline": "#000000", "last_sec": 3},
     "bgm": {"file": "", "volume": 0.15},  # bgm/ 폴더의 파일명, 원음 대비 볼륨
+    # 사용자가 직접 넣은 자막(번역 등). 절대 시각 기준 [{start, end, text}]
+    "extra_subs": [],
 }
 
 VF_VERTICAL = (
@@ -36,11 +51,61 @@ VF_VERTICAL = (
 
 
 def merge_style(style: dict | None) -> dict:
-    merged = {k: dict(v) for k, v in DEFAULT_STYLE.items()}
-    for key in merged:
-        if style and key in style:
-            merged[key].update(style[key])
+    """저장된 스타일에 새로 생긴 항목의 기본값을 채워 넣는다."""
+    merged = {}
+    for key, default in DEFAULT_STYLE.items():
+        if isinstance(default, dict):
+            merged[key] = dict(default)
+            if style and isinstance(style.get(key), dict):
+                merged[key].update(style[key])
+        else:
+            merged[key] = list(style[key]) if style and isinstance(
+                style.get(key), list) else list(default)
     return merged
+
+
+def media_duration(path: Path) -> float:
+    """미디어 길이(초). 못 읽으면 0."""
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(Path(path).resolve())],
+        capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+MIN_SUB_SEC = 0.35     # 이보다 짧으면 읽을 수 없음 — Whisper 환청 토막
+REPEAT_LIMIT = 3       # 같은 말이 연달아 이만큼 나오면 환청으로 보고 버림
+
+
+def clean_segments(segments: list[dict]) -> list[dict]:
+    """자막으로 쓸 수 없는 세그먼트 제거.
+
+    음악·박수 라벨, 빈 텍스트, 뒤집힌 시각, 너무 짧은 토막,
+    그리고 같은 말이 연달아 반복되는 구간(Whisper가 음악·무음에서 뱉는 환청).
+    """
+    kept = []
+    for s in segments:
+        text = (s.get("text") or "").strip()
+        if not text or text in NOISE_LABELS:
+            continue
+        start, end = float(s.get("start", 0)), float(s.get("end", 0))
+        if end - start < MIN_SUB_SEC:
+            continue
+        kept.append(s)
+
+    out, i = [], 0
+    while i < len(kept):
+        j = i
+        while j + 1 < len(kept) and kept[j + 1]["text"].strip() == kept[i]["text"].strip():
+            j += 1
+        run = j - i + 1
+        if run < REPEAT_LIMIT:
+            out.extend(kept[i:j + 1])
+        i = j + 1
+    return out
 
 
 def _hex_rgba(hex_color: str) -> tuple:
@@ -80,6 +145,30 @@ def _render_text_png(text: str, size: int, color: str, outline: str, out_path: P
     img.save(out_path)
 
 
+def _render_banner_png(src: Path, width: int, out_path: Path):
+    """배너 이미지를 지정 폭으로 줄여 PNG로 저장(비율 유지, 투명도 보존)."""
+    img = Image.open(src).convert("RGBA")
+    width = max(80, min(W, int(width)))
+    height = max(1, round(img.height * width / img.width))
+    img.resize((width, height), Image.LANCZOS).save(out_path)
+
+
+def _window(conf: dict, duration: float) -> tuple[float, float]:
+    """표시 구간(클립 기준). dur이 0이거나 없으면 시작~클립 끝."""
+    start = max(0.0, min(float(conf.get("start", 0) or 0), duration))
+    dur = float(conf.get("dur", 0) or 0)
+    end = duration if dur <= 0 else min(duration, start + dur)
+    return start, max(start, end)
+
+
+def _safe_pick(directory: Path, name: str) -> Path | None:
+    """지정 폴더 안의 파일만 허용 (스타일은 클라이언트 입력이라 경로 검증)."""
+    if not name:
+        return None
+    candidate = directory / Path(name).name
+    return candidate if candidate.is_file() else None
+
+
 def make_short(
     source: Path,
     start: float,
@@ -90,8 +179,8 @@ def make_short(
 ) -> Path:
     """구간을 잘라 세로 숏츠 mp4 생성.
 
-    segments: 절대 시각 기준 전사 세그먼트(자막용). None이면 자막 없음.
-    style: DEFAULT_STYLE 형태. 편집기에서 넘어온 좌표·크기·색 그대로 사용.
+    segments: 절대 시각 기준 전사 세그먼트(자막용). None이면 원본 자막 없음.
+    style: DEFAULT_STYLE 형태. 편집기에서 넘어온 좌표·크기·색·표시 구간 그대로 사용.
     """
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
@@ -119,11 +208,21 @@ def _make_short_inner(source, start, duration, out_path, segments, st, workdir) 
     end = start + duration
     overlays = []  # (png_path, y좌표, 표시 시작, 표시 끝) — 클립 기준 시각
 
-    if st["title"]["enabled"] and st["title"]["text"].strip():
-        png = workdir / "title.png"
-        t = st["title"]
-        _render_text_png(t["text"], int(t["size"]), t["color"], t["outline"], png)
-        overlays.append((png, int(t["y"]), 0, duration))
+    for key in ("title", "title2"):
+        t = st[key]
+        if t["enabled"] and t["text"].strip():
+            png = workdir / f"{key}.png"
+            _render_text_png(t["text"], int(t["size"]), t["color"], t["outline"], png)
+            s, e = _window(t, duration)
+            overlays.append((png, int(t["y"]), s, e))
+
+    b = st["banner"]
+    banner_src = _safe_pick(BANNER_DIR, b.get("file", "")) if b.get("enabled") else None
+    if banner_src:
+        png = workdir / "banner.png"
+        _render_banner_png(banner_src, b.get("width", 700), png)
+        s, e = _window(b, duration)
+        overlays.append((png, int(b["y"]), s, e))
 
     if st["cta"]["enabled"] and st["cta"]["text"].strip():
         png = workdir / "cta.png"
@@ -132,23 +231,36 @@ def _make_short_inner(source, start, duration, out_path, segments, st, workdir) 
         overlays.append((png, int(c["y"]),
                          max(0, duration - float(c.get("last_sec", 3))), duration))
 
-    if segments and st["subs"]["enabled"]:
-        s = st["subs"]
-        for i, seg in enumerate(x for x in segments
-                                if x["end"] > start and x["start"] < end):
+    # 사용자가 직접 넣은 자막(번역 등) — 원본 자막 스타일을 그대로 쓴다
+    sub_style = st["subs"]
+    extra = [x for x in st["extra_subs"]
+             if (x.get("text") or "").strip()
+             and float(x["end"]) > start and float(x["start"]) < end
+             and float(x["end"]) > float(x["start"])]
+    for i, x in enumerate(extra):
+        png = workdir / f"x{i}.png"
+        _render_text_png(x["text"].strip(), int(sub_style["size"]),
+                         sub_style["color"], sub_style["outline"], png)
+        overlays.append((png, int(sub_style["y"]),
+                         max(float(x["start"]), start) - start,
+                         min(float(x["end"]), end) - start))
+
+    if segments and sub_style["enabled"]:
+        for i, seg in enumerate(
+                x for x in clean_segments(segments)
+                if x["end"] > start and x["start"] < end
+                # 추가 자막이 덮는 시간대는 원본 자막 대신 추가 자막이 나온다
+                and not any(float(e["start"]) < (x["start"] + x["end"]) / 2 < float(e["end"])
+                            for e in extra)):
             png = workdir / f"s{i}.png"
-            _render_text_png(seg["text"], int(s["size"]), s["color"], s["outline"], png)
-            overlays.append((png, int(s["y"]),
+            _render_text_png(seg["text"], int(sub_style["size"]),
+                             sub_style["color"], sub_style["outline"], png)
+            overlays.append((png, int(sub_style["y"]),
                              max(seg["start"], start) - start,
                              min(seg["end"], end) - start))
 
-    # 배경음악 — bgm/ 폴더 안의 파일만 허용 (스타일은 클라이언트 입력이라 경로 검증)
     bgm = st.get("bgm") or {}
-    bgm_path = None
-    if bgm.get("file"):
-        candidate = BGM_DIR / Path(bgm["file"]).name
-        if candidate.is_file():
-            bgm_path = candidate
+    bgm_path = _safe_pick(BGM_DIR, bgm.get("file", ""))
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", str(start), "-t", str(duration), "-i", str(source.resolve())]
