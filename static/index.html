@@ -98,20 +98,28 @@
            align-items: center; justify-content: center; z-index: 10; }
   #modal.show { display: flex; }
   .ed-box { background: #1d2026; border: 1px solid #2a2e36; border-radius: 14px;
-            padding: 16px; display: flex; gap: 16px; max-height: 92vh; max-width: 96vw; }
-  .ed-left { flex: 0 0 auto; }
-  #canvas { position: relative; width: 270px; height: 480px; background: #000;
-            border-radius: 8px; overflow: hidden; user-select: none; }
-  #edv { position: absolute; left: 0; width: 270px; }
+            padding: 0 16px 16px; display: flex; flex-direction: column; gap: 12px;
+            max-height: 92vh; width: min(96vw, 940px); overflow-y: auto; }
+  /* 위: 미리보기 — 아래 설정을 스크롤해도 항상 보이게 고정 */
+  .ed-left { position: sticky; top: 0; z-index: 2; background: #1d2026;
+             padding: 16px 0 10px; display: flex; flex-direction: column;
+             align-items: center; border-bottom: 1px solid #2a2e36; }
+  #canvas { position: relative; width: 240px; height: 427px; background: #000;
+            border-radius: 8px; overflow: hidden; user-select: none; flex: 0 0 auto; }
+  #edv { position: absolute; left: 0; width: 240px; }
   .ov { position: absolute; left: 0; width: 100%; text-align: center; cursor: grab;
         font-family: "Apple SD Gothic Neo"; font-weight: 800; line-height: 1.24;
         white-space: pre-wrap; word-break: keep-all; padding: 0 14px; }
   .ov:active { cursor: grabbing; }
   .ov.dragging { outline: 1px dashed #7aa2ff; }
   .ov.ghost { opacity: .25; outline: 1px dashed #7aa2ff66; }
-  .ed-playrow { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-  .ed-right { width: 380px; max-width: 50vw; overflow-y: auto; display: flex;
-              flex-direction: column; gap: 12px; }
+  .ed-playrow { display: flex; gap: 8px; margin-top: 10px; align-items: center;
+                width: min(100%, 560px); }
+  .ed-playrow .muted { flex: 0 0 auto; }
+  /* 아래: 설정 — 넓어진 가로를 살려 2열 */
+  .ed-right { width: 100%; display: grid; gap: 12px; align-content: start;
+              grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .ed-right .full { grid-column: 1 / -1; }
   .ed-right h4 { margin: 0 0 6px; font-size: 13px; color: #8a919e; font-weight: 600; }
   .presets { display: flex; gap: 6px; flex-wrap: wrap; }
   .presets button { padding: 7px 10px; font-size: 13px; }
@@ -152,8 +160,7 @@
   .cstat.bad { color: #ff8f9a; }
   .foot-note { text-align: center; margin-top: 8px; color: #5c6370; font-size: 11px; }
   @media (max-width: 720px) { /* 앱 내장 브라우저 좁은 패널 대응 */
-    .ed-box { flex-direction: column; overflow-y: auto; }
-    .ed-right { width: auto; max-width: none; }
+    .ed-right { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -226,7 +233,7 @@
         <div class="ov" id="ovSub"></div>
         <div class="ov" id="ovCta"></div>
       </div>
-      <div class="muted" style="margin-top:8px; line-height:1.45">
+      <div class="muted" style="margin-top:8px; line-height:1.45; max-width:560px; text-align:center">
         재생바를 옮기면 그 시점의 실제 화면이 보입니다.
         표시 구간 밖 요소는 <b>흐리게</b> 표시됩니다(재생 중에는 사라짐).
       </div>
@@ -237,7 +244,7 @@
       </div>
     </div>
     <div class="ed-right">
-      <div>
+      <div class="full">
         <h4>레이아웃 템플릿</h4>
         <div class="presets" id="presets"></div>
       </div>
@@ -333,7 +340,7 @@
           작아집니다. 미리보기에서는 음악이 들리지 않고 <b>생성된 영상에만</b> 들어갑니다.
         </div>
       </div>
-      <div class="ctl">
+      <div class="ctl full">
         <h4>자막 내용 수정 · 추가</h4>
         <div class="row" style="margin-bottom:8px">
           <button class="ghost" id="segAdd">+ 현재 시점에 자막 추가</button>
@@ -346,11 +353,11 @@
           추가 자막이 있는 시간대에는 원본 자막 대신 추가 자막이 나옵니다.
         </div>
       </div>
-      <div class="ed-actions">
+      <div class="ed-actions full">
         <button class="ghost" id="edClose">닫기</button>
         <button id="edMake">숏츠 생성</button>
       </div>
-      <div class="err" id="edErr"></div>
+      <div class="err full" id="edErr"></div>
     </div>
   </div>
 </div>
@@ -677,7 +684,9 @@ setInterval(() => { // 진행 중 작업의 경과시간 초침 (재렌더 없�
 }, 1000);
 
 /* ---------- 자막 편집기 ---------- */
-const SCALE = 270 / 1080; // 미리보기:실제 = 1:4
+const CANVAS_W = 240;                 // 미리보기 캔버스 가로(px)
+const CANVAS_H = Math.round(CANVAS_W * 1920 / 1080);
+const SCALE = CANVAS_W / 1080;        // 미리보기:실제 배율
 const PRESETS = [
   { name: "타이틀+자막", title: { enabled: true, y: 170, size: 76, color: "#FFD400", outline: "#000000" },
     subs: { enabled: true, y: 1330, size: 58, color: "#FFFFFF", outline: "#000000" } },
@@ -772,9 +781,9 @@ async function openEditor(encName, index) {
 }
 
 function positionVideo() {
-  const h = 270 / (edv.videoWidth / edv.videoHeight || 16 / 9);
-  edv.style.height = `${Math.min(h, 480)}px`;
-  edv.style.top = `${(480 - Math.min(h, 480)) / 2}px`;
+  const h = CANVAS_W / (edv.videoWidth / edv.videoHeight || 16 / 9);
+  edv.style.height = `${Math.min(h, CANVAS_H)}px`;
+  edv.style.top = `${(CANVAS_H - Math.min(h, CANVAS_H)) / 2}px`;
 }
 
 /* 자막 목록 — 원본 전사 + 사용자가 추가한 자막을 시간순으로 */
@@ -995,7 +1004,7 @@ function makeDraggable(el, conf) {
     el.classList.add("dragging");
     const startY = e.clientY, startTop = conf().y * SCALE;
     const move = (ev) => {
-      const top = Math.min(480 - 20, Math.max(0, startTop + ev.clientY - startY));
+      const top = Math.min(CANVAS_H - 20, Math.max(0, startTop + ev.clientY - startY));
       conf().y = Math.round(top / SCALE);
       el.style.top = `${top}px`;
     };
