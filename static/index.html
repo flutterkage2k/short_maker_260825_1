@@ -108,6 +108,7 @@
         white-space: pre-wrap; word-break: keep-all; padding: 0 14px; }
   .ov:active { cursor: grabbing; }
   .ov.dragging { outline: 1px dashed #7aa2ff; }
+  .ov.ghost { opacity: .25; outline: 1px dashed #7aa2ff66; }
   .ed-playrow { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
   .ed-right { width: 380px; max-width: 50vw; overflow-y: auto; display: flex;
               flex-direction: column; gap: 12px; }
@@ -224,6 +225,10 @@
         <div class="ov" id="ovTitle2"></div>
         <div class="ov" id="ovSub"></div>
         <div class="ov" id="ovCta"></div>
+      </div>
+      <div class="muted" style="margin-top:8px; line-height:1.45">
+        재생바를 옮기면 그 시점의 실제 화면이 보입니다.
+        표시 구간 밖 요소는 <b>흐리게</b> 표시됩니다(재생 중에는 사라짐).
       </div>
       <div class="ed-playrow">
         <button class="ghost" id="edPlay">재생</button>
@@ -882,7 +887,6 @@ function readControls() {
   .forEach((id) => $("#" + id).addEventListener("input", readControls));
 
 function styleOverlay(el, conf) {
-  el.style.display = conf.enabled ? "" : "none";
   el.style.top = `${conf.y * SCALE}px`;
   el.style.fontSize = `${conf.size * SCALE}px`;
   el.style.color = conf.color;
@@ -905,9 +909,8 @@ function applyStyleToUI() {
   updateOverlays();
 }
 
-/* 클립 기준 표시 구간 안인지 (일시정지 중엔 항상 보이게 — 위치 잡기 편하도록) */
+/* 클립 기준 표시 구간 안인지 */
 function inWindow(conf, t) {
-  if (edv.paused) return true;
   const rel = t - ed.clip.start_sec;
   const clipDur = ed.clip.end_sec - ed.clip.start_sec;
   const s = Number(conf.start) || 0;
@@ -915,25 +918,33 @@ function inWindow(conf, t) {
   return rel >= s && rel <= e;
 }
 
+/* 표시 구간 밖이면: 재생 중엔 숨기고, 일시정지 중엔 흐리게(위치는 계속 드래그 가능) */
+function showOv(el, on, active, display) {
+  if (!on) { el.style.display = "none"; return; }
+  el.classList.toggle("ghost", !active);
+  el.style.display = (active || edv.paused) ? (display || "") : "none";
+}
+
 function updateOverlays() {
   if (!ed) return;
   const t = edv.currentTime;
-  $("#ovTitle").textContent =
-    inWindow(ed.style.title, t) ? (ed.style.title.text || "") : "";
-  $("#ovTitle2").textContent =
-    inWindow(ed.style.title2, t) ? (ed.style.title2.text || "") : "";
-  $("#ovBanner").style.display =
-    ed.style.banner.enabled && ed.style.banner.file && inWindow(ed.style.banner, t)
-      ? "block" : "none";
+  $("#ovTitle").textContent = ed.style.title.text || "";
+  $("#ovTitle2").textContent = ed.style.title2.text || "";
+  showOv($("#ovTitle"), ed.style.title.enabled && ed.style.title.text,
+         inWindow(ed.style.title, t));
+  showOv($("#ovTitle2"), ed.style.title2.enabled && ed.style.title2.text,
+         inWindow(ed.style.title2, t));
+  showOv($("#ovBanner"), ed.style.banner.enabled && ed.style.banner.file,
+         inWindow(ed.style.banner, t), "block");
   // 추가 자막이 덮는 시간대는 원본 자막 대신 추가 자막 (렌더러와 같은 규칙)
   const extra = ed.style.extra_subs.find(
     (x) => t >= Number(x.start) && t < Number(x.end) && (x.text || "").trim());
   const seg = ed.segments.find((s) => t >= s.start && t < s.end);
   $("#ovSub").textContent = extra ? extra.text : (seg ? seg.text : "");
-  // 일시정지 중엔 항상 표시(드래그로 위치 잡기 편하게), 재생 중엔 실제 타이밍대로
-  const showCta = ed.style.cta.enabled &&
-    (edv.paused || t >= ed.clip.end_sec - (ed.style.cta.last_sec || 3));
-  $("#ovCta").textContent = showCta ? ed.style.cta.text : "";
+  $("#ovSub").style.display = ed.style.subs.enabled || extra ? "" : "none";
+  $("#ovCta").textContent = ed.style.cta.text || "";
+  showOv($("#ovCta"), ed.style.cta.enabled && ed.style.cta.text,
+         t >= ed.clip.end_sec - (ed.style.cta.last_sec || 3));
   $("#edTime").textContent =
     `${fmt(Math.max(0, t - ed.clip.start_sec))} / ${fmt(ed.clip.end_sec - ed.clip.start_sec)}`;
   $("#segAddAt").textContent = `현재 ${fmt(Math.max(0, t - ed.clip.start_sec))} 지점`;
