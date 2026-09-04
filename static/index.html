@@ -367,6 +367,14 @@ const $ = (s) => document.querySelector(s);
 const opened = new Set();
 const pending = new Set(); // "cut:이름:번호" / "meta:이름:번호" — 생성 중 표시가 재렌더에도 유지
 const jsName = (n) => encodeURIComponent(n).replace(/'/g, "%27"); // '가 인라인 핸들러 안 깨게
+function startTimer(setText) {
+  const t0 = Date.now();
+  const tick = () => setText(Math.round((Date.now() - t0) / 1000));
+  tick();
+  const id = setInterval(tick, 1000);
+  return () => clearInterval(id);
+}
+
 async function errText(res) {
   try { return (await res.json()).detail || res.statusText; }
   catch { return res.statusText || `HTTP ${res.status}`; }
@@ -437,8 +445,10 @@ function metaHtml(m) {
   </div>`;
 }
 
+function fileName(u) { return u.split("/").pop().split("?")[0]; }
+
 function cutLabel(u) {
-  const f = u.split("/").pop();
+  const f = fileName(u);
   if (f.includes("_edit")) return "편집 스타일";
   if (f.includes("_sub")) return "기본 스타일 (자막)";
   return "자막 없음";
@@ -470,7 +480,7 @@ function clipHtml(job, c, i) {
     ${metaHtml(meta)}
     ${cuts.map((u) => `<div class="vlabel">${cutLabel(u)}</div>
       <video class="result" src="${u}" controls preload="metadata"></video>
-      <a class="dl" href="${u}" download>다운로드: ${u.split("/").pop()}</a>`).join("")}
+      <a class="dl" href="${u}" download="${fileName(u)}">다운로드: ${fileName(u)}</a>`).join("")}
   </div>`;
 }
 
@@ -509,7 +519,8 @@ async function cut(name, index, btn) {
   if (pending.has(key)) return;
   pending.add(key);
   const subs = btn.parentElement.querySelector("[data-subs]").checked;
-  btn.disabled = true; btn.textContent = "생성 중...";
+  btn.disabled = true;
+  const stop = startTimer((sec) => { btn.textContent = `생성 중... ${sec}초`; });
   try {
     const res = await fetch(`/api/jobs/${name}/cut`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -520,6 +531,7 @@ async function cut(name, index, btn) {
   } catch (e) {
     toast("생성 실패: " + e.message);
   } finally {
+    stop();
     pending.delete(key);
     lastData = "";
     refresh();
@@ -1033,8 +1045,9 @@ $("#edMake").addEventListener("click", async () => {
   if (!ed) return;
   const btn = $("#edMake");
   if (btn.disabled) return;
-  btn.disabled = true; btn.textContent = "생성 중...";
-  $("#edErr").textContent = "";
+  btn.disabled = true;
+  const stop = startTimer((sec) => { btn.textContent = `생성 중... ${sec}초`; });
+  $("#edErr").textContent = "인코딩 중입니다. 창은 완료되면 자동으로 닫힙니다.";
   try {
     const edits = [...ed.edits].map(([i, text]) => ({ i, text }));
     const res = await fetch(`/api/jobs/${jsName(ed.name)}/cut`, {
@@ -1051,6 +1064,7 @@ $("#edMake").addEventListener("click", async () => {
   } catch (e) {
     $("#edErr").textContent = "생성 실패: " + e.message;
   } finally {
+    stop();
     btn.disabled = false; btn.textContent = "숏츠 생성";
   }
 });

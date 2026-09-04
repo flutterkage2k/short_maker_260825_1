@@ -238,7 +238,10 @@ def list_jobs():
                 if clips_dir.exists():
                     for f in clips_dir.glob("clip_*.mp4"):
                         idx = f.stem.split("_")[1]
-                        entry["cuts"].setdefault(idx, []).append(f"/output/{d.name}/clips/{f.name}")
+                        # ?v=수정시각 — 같은 이름으로 다시 만들면 브라우저가 옛 파일을
+                        # 캐시에서 꺼내 0:00으로 보여주는 문제 방지
+                        entry["cuts"].setdefault(idx, []).append(
+                            f"/output/{d.name}/clips/{f.name}?v={int(f.stat().st_mtime)}")
                     for f in clips_dir.glob("meta_*.json"):
                         idx = f.stem.split("_")[1]
                         entry["metas"][idx] = json.loads(f.read_text(encoding="utf-8"))
