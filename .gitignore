@@ -2,6 +2,7 @@
 output/
 temp/
 bgm/
+banner/
 doc/
 __pycache__/
 .claude/
